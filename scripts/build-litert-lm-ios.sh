@@ -89,72 +89,46 @@ collect_libs() {
 
     log "Collecting library for ${config_label}..."
 
-    # apple_static_library output goes to bazel-bin/ios_package/
-    # The output name follows: LiteRTLM_<lipo-platform>.a
-    # Try multiple possible output paths
-    local bazel_bin
-    bazel_bin="$(bazel info bazel-bin --config="${config_label}" 2>/dev/null || true)"
+    cd "${LITERT_LM_DIR}"
+    local output_base
+    output_base="$(bazel info output_base 2>/dev/null)"
 
-    # If that didn't work, try without config (apple_static_library may use host bin)
-    if [ -z "${bazel_bin}" ] || [ ! -d "${bazel_bin}" ]; then
-        bazel_bin="$(bazel info bazel-bin 2>/dev/null || echo "bazel-bin")"
-    fi
+    # apple_static_library produces two files:
+    #   LiteRTLM-arm64-apple-ios13.0-fl.a  (per-arch, contains all deps - THIS is what we want)
+    #   LiteRTLM_lipo.a  (lipo wrapper - may be empty when using --config override)
+    #
+    # Search for the per-arch .a file first (the -fl.a suffix), then fall back to _lipo.a
+    log "Searching for per-arch static library..."
 
-    log "Looking in bazel-bin: ${bazel_bin}"
-
-    # apple_static_library produces output in bazel-bin/ios_package/
-    # The .a might be named LiteRTLM_lipo.a or similar
     local found_lib=""
+    local best_size=0
 
-    # Search for the output .a file
+    # Find all LiteRTLM .a files, pick the largest non-lipo one
     while IFS= read -r -d '' f; do
-        if [ -z "${found_lib}" ]; then
+        local fsize
+        fsize=$(stat -f%z "$f" 2>/dev/null || stat --format=%s "$f" 2>/dev/null || echo "0")
+        log "  candidate: $f (${fsize} bytes)"
+        if [ "${fsize}" -gt "${best_size}" ]; then
+            best_size="${fsize}"
             found_lib="$f"
         fi
-    done < <(find "${bazel_bin}/ios_package" -name '*.a' -print0 2>/dev/null)
+    done < <(find "${output_base}/execroot" -name 'LiteRTLM*.a' \
+        -not -path '*-exec-*' \
+        -print0 2>/dev/null)
 
-    # Broader search if not found in expected location
-    if [ -z "${found_lib}" ]; then
-        log "Not found in ios_package/, searching broader..."
-        local output_base
-        output_base="$(bazel info output_base 2>/dev/null)"
-        while IFS= read -r -d '' f; do
-            if [ -z "${found_lib}" ]; then
-                found_lib="$f"
-            fi
-        done < <(find "${output_base}/execroot" -path "*/ios_package/*" -name '*.a' \
-            -not -path '*-exec-*' -print0 2>/dev/null)
-    fi
-
-    # Even broader: find any LiteRTLM*.a
-    if [ -z "${found_lib}" ]; then
-        log "Searching all of bazel-out for LiteRTLM..."
-        local output_base
-        output_base="$(bazel info output_base 2>/dev/null)"
-        while IFS= read -r -d '' f; do
-            log "  candidate: $f ($(du -h "$f" | cut -f1))"
-            if [ -z "${found_lib}" ]; then
-                found_lib="$f"
-            fi
-        done < <(find "${output_base}/execroot" -name 'LiteRTLM*' -name '*.a' \
-            -not -path '*-exec-*' -print0 2>/dev/null)
-    fi
-
-    if [ -z "${found_lib}" ]; then
-        echo "ERROR: Could not find apple_static_library output" >&2
-        echo "DEBUG: Contents of bazel-bin/ios_package/:" >&2
-        ls -laR "${bazel_bin}/ios_package/" 2>/dev/null >&2 || echo "  (directory not found)" >&2
-        echo "DEBUG: All .a files in output:" >&2
-        local output_base
-        output_base="$(bazel info output_base 2>/dev/null)"
-        find "${output_base}/execroot" -name "*.a" -not -path '*-exec-*' 2>/dev/null | head -30 >&2 || true
+    if [ -z "${found_lib}" ] || [ "${best_size}" -eq 0 ]; then
+        echo "ERROR: Could not find non-empty apple_static_library output" >&2
+        echo "DEBUG: All .a files in ios_package:" >&2
+        find "${output_base}/execroot" -path "*/ios_package/*" -type f 2>/dev/null | head -20 >&2
+        echo "DEBUG: All LiteRTLM files:" >&2
+        find "${output_base}/execroot" -name "LiteRTLM*" 2>/dev/null | head -20 >&2
         exit 1
     fi
 
-    log "Found library: ${found_lib} ($(du -h "${found_lib}" | cut -f1))"
+    log "Found library: ${found_lib} (${best_size} bytes)"
     cp "${found_lib}" "${dest_dir}/liblitert_lm.a"
 
-    # Verify it's the right architecture
+    # Verify architecture
     log "Architecture info:"
     lipo -info "${dest_dir}/liblitert_lm.a" 2>/dev/null || file "${dest_dir}/liblitert_lm.a"
 }
@@ -221,35 +195,34 @@ collect_headers() {
     bazel_external="$(bazel info output_base 2>/dev/null)/external"
 
     # Abseil
-    if [ -d "${bazel_external}/com_google_absl" ]; then
+    if [ -d "${bazel_external}/com_google_absl/absl" ]; then
         log "Copying abseil headers..."
-        (cd "${bazel_external}/com_google_absl" && find absl -name '*.h' -o -name '*.inc' | while read -r f; do
+        (cd "${bazel_external}/com_google_absl" && find absl \( -name '*.h' -o -name '*.inc' \) 2>/dev/null | while read -r f; do
             mkdir -p "${dest_headers}/$(dirname "$f")"
             cp "$f" "${dest_headers}/$f"
-        done)
+        done) || true
     fi
 
     # nlohmann/json
     if [ -d "${bazel_external}/nlohmann_json" ]; then
         log "Copying nlohmann/json headers..."
-        (cd "${bazel_external}/nlohmann_json" && find include -name '*.hpp' -o -name '*.h' 2>/dev/null | while read -r f; do
-            mkdir -p "${dest_headers}/$(dirname "$f")"
-            cp "$f" "${dest_headers}/$f"
-        done)
-        # Also copy top-level headers
-        (cd "${bazel_external}/nlohmann_json" && find . -maxdepth 2 -name '*.hpp' -o -name '*.h' 2>/dev/null | while read -r f; do
-            mkdir -p "${dest_headers}/$(dirname "$f")"
-            cp "$f" "${dest_headers}/$f"
-        done)
+        (cd "${bazel_external}/nlohmann_json" && find . \( -name '*.hpp' -o -name '*.h' \) 2>/dev/null | while read -r f; do
+            mkdir -p "${dest_headers}/nlohmann_json/$(dirname "$f")"
+            cp "$f" "${dest_headers}/nlohmann_json/$f"
+        done) || true
     fi
 
     # LiteRT headers
     if [ -d "${bazel_external}/litert" ]; then
         log "Copying LiteRT headers..."
-        (cd "${bazel_external}/litert" && find litert tflite -name '*.h' 2>/dev/null | head -700 | while read -r f; do
-            mkdir -p "${dest_headers}/$(dirname "$f")"
-            cp "$f" "${dest_headers}/$f"
-        done)
+        for subdir in litert tflite; do
+            if [ -d "${bazel_external}/litert/${subdir}" ]; then
+                (cd "${bazel_external}/litert" && find "${subdir}" -name '*.h' 2>/dev/null | head -500 | while read -r f; do
+                    mkdir -p "${dest_headers}/$(dirname "$f")"
+                    cp "$f" "${dest_headers}/$f"
+                done) || true
+            fi
+        done
     fi
 
     local header_count
