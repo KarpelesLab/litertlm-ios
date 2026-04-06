@@ -208,7 +208,7 @@ static litert::lm::OptionalArgs OptionalArgsWithConstraint(
 
     // Preface (system prompt + tools)
     if (config.systemPrompt || config.tools) {
-        nlohmann::ordered_json preface_json = nlohmann::ordered_json::object();
+        litert::lm::JsonPreface jsonPreface;
 
         if (config.systemPrompt) {
             nlohmann::ordered_json messages = nlohmann::ordered_json::array();
@@ -216,14 +216,13 @@ static litert::lm::OptionalArgs OptionalArgsWithConstraint(
             sysMsg["role"] = "system";
             sysMsg["content"] = std::string([config.systemPrompt UTF8String]);
             messages.push_back(sysMsg);
-            preface_json["messages"] = messages;
+            jsonPreface.messages = messages;
         }
 
         if (config.tools) {
-            preface_json["tools"] = NlohmannFromNSArray(config.tools);
+            jsonPreface.tools = NlohmannFromNSArray(config.tools);
         }
 
-        litert::lm::JsonPreface jsonPreface(preface_json);
         builder.SetPreface(litert::lm::Preface(jsonPreface));
     }
 
