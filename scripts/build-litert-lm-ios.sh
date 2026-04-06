@@ -72,6 +72,25 @@ build_for_config() {
         -//schema/py:* \
         -//kotlin/...
 
+    # Also build the proto and litert_lm_lib targets directly (without the
+    # apple_static_library platform transition) so their generated .pb.h
+    # headers land in the predictable bazel-bin path for collection.
+    log "Building proto targets for header generation..."
+    bazel build \
+        --config="${config}" \
+        --disk_cache="${CACHE_DIR}" \
+        --build_tag_filters=-requires-mac-inputs:hard,-no_mac \
+        //runtime/proto:engine_cc_proto \
+        //runtime/proto:sampler_params_cc_proto \
+        //runtime/proto:llm_metadata_cc_proto \
+        //runtime/proto:llm_model_type_cc_proto \
+        //runtime/proto:token_cc_proto \
+        //runtime/proto:litert_lm_metrics_cc_proto \
+        -- \
+        -//python/... \
+        -//schema/py:* \
+        -//kotlin/... 2>/dev/null || true
+
     log "Build for ${config} complete."
 }
 
@@ -166,26 +185,42 @@ collect_headers() {
     #    land in a different bazel-out/<config>/ subdir than bazel info reports.
     #    Search ALL of bazel-out for runtime/ generated headers.
     # -----------------------------------------------------------------------
-    log "Copying generated headers from bazel-out..."
+    log "Copying generated headers from bazel-bin and bazel-out..."
     local output_base
     output_base="$(bazel info output_base 2>/dev/null)"
     local execroot="${output_base}/execroot/litert_lm"
 
-    # Find all generated runtime/ headers across all config dirs in bazel-out,
-    # excluding host/exec configs and external deps
+    # First: collect from the predictable bazel-bin path (proto targets built
+    # without apple_static_library transition land here)
+    if [ -d "${bazel_bin}/runtime" ]; then
+        log "  Copying from bazel-bin/runtime/..."
+        (cd "${bazel_bin}" && find runtime -name '*.h' 2>/dev/null | while read -r f; do
+            mkdir -p "${dest_headers}/$(dirname "$f")"
+            cp "$f" "${dest_headers}/$f" 2>/dev/null || true
+        done) || true
+    fi
+
+    # Second: also search ALL bazel-out config dirs for generated runtime/ headers
+    # (catches anything from the apple_static_library platform transition)
     (find "${execroot}/bazel-out" -path "*/bin/runtime/*.h" \
         -not -path '*-exec-*' \
         -not -path '*/external/*' \
         -not -path '*darwin_arm64-opt/bin/*' \
+        -not -path '*_virtual_includes*' \
+        -type f \
         2>/dev/null | while read -r f; do
-        # Extract relative path from "bin/" onward
         local rel
         rel=$(echo "$f" | sed -n 's|.*/bin/\(runtime/.*\)|\1|p')
         if [ -n "${rel}" ] && [ ! -f "${dest_headers}/${rel}" ]; then
             mkdir -p "${dest_headers}/$(dirname "$rel")"
-            cp "$f" "${dest_headers}/$rel" 2>/dev/null || cat "$f" > "${dest_headers}/$rel" 2>/dev/null || true
+            cp "$f" "${dest_headers}/$rel" 2>/dev/null || true
         fi
     done) || true
+
+    # Debug: verify proto headers were found
+    local proto_count
+    proto_count=$(find "${dest_headers}/runtime/proto" -name '*.pb.h' 2>/dev/null | wc -l | tr -d ' ')
+    log "  Found ${proto_count} proto-generated headers"
 
     # -----------------------------------------------------------------------
     # C) External dependency headers
