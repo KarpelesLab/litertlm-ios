@@ -1,5 +1,6 @@
 #import "LRTEngine.h"
 #import "LRTSession.h"
+#import "LRTTypes+Internal.h"
 
 // C++ headers
 #include "runtime/engine/engine.h"
@@ -85,7 +86,13 @@ static litert::lm::Backend BackendFromLRT(LRTBackend b) {
     }
 
     if (config.numCpuThreads > 0) {
-        settings->GetMutableMainExecutorSettings().SetNumCpuThreads(config.numCpuThreads);
+        // CPU threads are in CpuConfig, accessed via backend config
+        auto cpuConfigResult = settings->GetMutableMainExecutorSettings()
+            .template MutableBackendConfig<litert::lm::CpuConfig>();
+        if (cpuConfigResult.ok()) {
+            cpuConfigResult->number_of_threads = (uint32_t)config.numCpuThreads;
+            settings->GetMutableMainExecutorSettings().SetBackendConfig(*cpuConfigResult);
+        }
     }
     if (config.benchmark) {
         settings->GetMutableBenchmarkParams(); // enables benchmark
@@ -119,8 +126,8 @@ static litert::lm::Backend BackendFromLRT(LRTBackend b) {
     // Sampler parameters
     auto &sampler = sessionConfig.GetMutableSamplerParams();
     sampler.set_temperature(config.temperature);
-    sampler.set_top_k((int)config.topK);
-    sampler.set_top_p(config.topP);
+    sampler.set_k((int)config.topK);
+    sampler.set_p(config.topP);
 
     auto session = _engine->CreateSession(sessionConfig);
     if (!session.ok()) {

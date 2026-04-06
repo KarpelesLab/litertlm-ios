@@ -58,55 +58,40 @@ jobs:
             lipo -info "$lib" 2>/dev/null || file "$lib"
           done
 
-      - name: Test compile against artifact
+      - name: Test compile wrapper against artifact
         run: |
-          # Write a test file that includes the key headers our wrapper needs
-          cat > /tmp/test_litert_lm.mm << 'TESTEOF'
-          #include "runtime/engine/engine.h"
-          #include "runtime/engine/engine_factory.h"
-          #include "runtime/engine/engine_settings.h"
-          #include "runtime/engine/io_types.h"
-          #include "runtime/engine/litert_lm_lib.h"
-          #include "runtime/conversation/conversation.h"
-          #include "runtime/conversation/io_types.h"
-          #include "runtime/components/tokenizer.h"
-          #include "runtime/components/constrained_decoding/constraint.h"
-          #include "runtime/components/constrained_decoding/constraint_provider.h"
-          #include "runtime/components/constrained_decoding/constraint_provider_config.h"
-
-          // Verify key types are available
-          static_assert(sizeof(litert::lm::Engine) > 0, "Engine type");
-          static_assert(sizeof(litert::lm::InputText) > 0, "InputText type");
-          static_assert(sizeof(litert::lm::InputImage) > 0, "InputImage type");
-          static_assert(sizeof(litert::lm::Responses) > 0, "Responses type");
-
-          void test() {
-              // Verify basic API surface compiles
-              using E = litert::lm::Engine;
-              using S = litert::lm::Engine::Session;
-              (void)sizeof(E);
-              (void)sizeof(S);
-          }
-          TESTEOF
-
           HEADERS="build/output/ios_sim_arm64/headers"
-          echo "=== Header dirs ==="
-          ls -d "${HEADERS}"/*/  2>/dev/null | head -20
-          echo "=== Attempting compile ==="
+          WRAPPER="Sources/LiteRTLM"
+          CLANG_FLAGS=(
+            -std=c++20
+            -fsyntax-only
+            -fobjc-arc
+            -target arm64-apple-ios13.0-simulator
+            -isysroot "$(xcrun --sdk iphonesimulator --show-sdk-path)"
+            -I "${HEADERS}"
+            -I "${HEADERS}/nlohmann_json"
+            -I "${HEADERS}/nlohmann_json/include"
+            -I "${WRAPPER}"
+            -Wno-deprecated-declarations
+          )
 
-          xcrun --sdk iphonesimulator clang++ \
-            -std=c++20 \
-            -fsyntax-only \
-            -c /tmp/test_litert_lm.mm \
-            -I "${HEADERS}" \
-            -I "${HEADERS}/nlohmann_json" \
-            -I "${HEADERS}/nlohmann_json/include" \
-            -fobjc-arc \
-            -target arm64-apple-ios13.0-simulator \
-            -isysroot "$(xcrun --sdk iphonesimulator --show-sdk-path)" \
-            2>&1
+          echo "=== Compiling each wrapper .mm file ==="
+          FAIL=0
+          for mm_file in "${WRAPPER}"/*.mm; do
+            echo "--- Compiling $(basename "$mm_file") ---"
+            if xcrun --sdk iphonesimulator clang++ "${CLANG_FLAGS[@]}" -c "$mm_file" 2>&1; then
+              echo "  OK"
+            else
+              echo "  FAILED"
+              FAIL=1
+            fi
+          done
 
-          echo "=== Compile test PASSED ==="
+          if [ "$FAIL" -ne 0 ]; then
+            echo "=== Compile test FAILED ==="
+            exit 1
+          fi
+          echo "=== All wrapper files compile OK ==="
 
       - name: Upload xcframework artifact
         uses: actions/upload-artifact@v4

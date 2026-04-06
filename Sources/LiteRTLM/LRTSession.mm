@@ -1,4 +1,5 @@
 #import "LRTSession.h"
+#import "LRTTypes+Internal.h"
 
 #include "runtime/engine/engine.h"
 #include "runtime/engine/io_types.h"

@@ -1,5 +1,6 @@
 #import "LRTConversation.h"
 #import "LRTEngine.h"
+#import "LRTTypes+Internal.h"
 
 #include "runtime/engine/engine.h"
 #include "runtime/engine/engine_settings.h"
@@ -201,8 +202,8 @@ static litert::lm::Conversation::OptionalArgs OptionalArgsWithConstraint(
 
     auto &sampler = sessionConfig.GetMutableSamplerParams();
     sampler.set_temperature(config.temperature);
-    sampler.set_top_k((int)config.topK);
-    sampler.set_top_p(config.topP);
+    sampler.set_k((int)config.topK);
+    sampler.set_p(config.topP);
 
     builder.SetSessionConfig(sessionConfig);
 
