@@ -1,0 +1,86 @@
+name: "Build LiteRT-LM for iOS"
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      litert_lm_version:
+        description: 'LiteRT-LM version tag'
+        default: 'v0.10.1'
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios:
+    name: "Build iOS xcframework"
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      LITERT_LM_VERSION: ${{ inputs.litert_lm_version || 'v0.10.1' }}
+      WORK_DIR: ${{ github.workspace }}/build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up cache keys
+        id: cache-keys
+        run: |
+          echo "key=bazel-ios-${{ env.LITERT_LM_VERSION }}-${{ runner.os }}-${{ hashFiles('scripts/build-litert-lm-ios.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Bazel cache
+        uses: actions/cache/restore@v4
+        id: bazel-cache
+        with:
+          path: |
+            ~/.cache/bazel-ios-arm64
+            ~/.cache/bazel-ios-sim
+          key: ${{ steps.cache-keys.outputs.key }}
+          restore-keys: |
+            bazel-ios-${{ env.LITERT_LM_VERSION }}-${{ runner.os }}-
+
+      - name: Build LiteRT-LM for iOS
+        run: |
+          chmod +x scripts/build-litert-lm-ios.sh
+          scripts/build-litert-lm-ios.sh
+
+      - name: Verify xcframework
+        run: |
+          echo "=== xcframework structure ==="
+          find build/output/LiteRTLM.xcframework -maxdepth 3 -type f | head -30
+          echo ""
+          echo "=== Library architectures ==="
+          for lib in build/output/*/liblitert_lm.a; do
+            echo "--- $lib ---"
+            lipo -info "$lib" 2>/dev/null || file "$lib"
+          done
+
+      - name: Upload xcframework artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiteRTLM-xcframework-${{ env.LITERT_LM_VERSION }}
+          path: build/output/LiteRTLM.xcframework
+          retention-days: 30
+
+      - name: Upload raw libraries artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiteRTLM-libs-${{ env.LITERT_LM_VERSION }}
+          path: |
+            build/output/ios_arm64/liblitert_lm.a
+            build/output/ios_sim_arm64/liblitert_lm.a
+          retention-days: 30
+
+      - name: Save Bazel cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: |
+            ~/.cache/bazel-ios-arm64
+            ~/.cache/bazel-ios-sim
+          key: ${{ steps.cache-keys.outputs.key }}
