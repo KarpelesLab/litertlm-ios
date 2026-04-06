@@ -161,42 +161,31 @@ collect_headers() {
     done) || true
 
     # -----------------------------------------------------------------------
-    # B) Generated headers from bazel-bin (proto .pb.h, build_config.h, etc.)
+    # B) Generated headers from bazel-out (proto .pb.h, build_config.h, etc.)
+    #    apple_static_library does a platform transition, so generated files
+    #    land in a different bazel-out/<config>/ subdir than bazel info reports.
+    #    Search ALL of bazel-out for runtime/ generated headers.
     # -----------------------------------------------------------------------
-    log "Copying generated headers from bazel-bin..."
-    # Proto-generated headers
-    if [ -d "${bazel_bin}/runtime" ]; then
-        (cd "${bazel_bin}" && find runtime -name '*.h' 2>/dev/null | while read -r f; do
-            mkdir -p "${dest_headers}/$(dirname "$f")"
-            cp "$f" "${dest_headers}/$f"
-        done) || true
-    fi
-    # build_config.h and other generated headers at the top level of bazel-bin
-    for gen_hdr in build_config.h config.h; do
-        if [ -f "${bazel_bin}/${gen_hdr}" ]; then
-            cp "${bazel_bin}/${gen_hdr}" "${dest_headers}/${gen_hdr}"
-        fi
-    done
-    # Search more broadly for build_config.h (may be nested)
-    while IFS= read -r -d '' f; do
-        local rel="${f#"${bazel_bin}/"}"
-        mkdir -p "${dest_headers}/$(dirname "$rel")"
-        cp "$f" "${dest_headers}/$rel"
-    done < <(find "${bazel_bin}" -name 'build_config.h' -not -path '*/external/*' -print0 2>/dev/null) || true
-
-    # Also check bazel-genfiles and the output base for generated headers
+    log "Copying generated headers from bazel-out..."
     local output_base
     output_base="$(bazel info output_base 2>/dev/null)"
     local execroot="${output_base}/execroot/litert_lm"
-    for search_dir in "${execroot}/bazel-out/${config_label}-opt/bin" "${execroot}/bazel-genfiles"; do
-        if [ -d "${search_dir}" ]; then
-            while IFS= read -r -d '' f; do
-                local rel="${f#"${search_dir}/"}"
-                mkdir -p "${dest_headers}/$(dirname "$rel")"
-                cp "$f" "${dest_headers}/$rel"
-            done < <(find "${search_dir}" -name 'build_config.h' -print0 2>/dev/null) || true
+
+    # Find all generated runtime/ headers across all config dirs in bazel-out,
+    # excluding host/exec configs and external deps
+    (find "${execroot}/bazel-out" -path "*/bin/runtime/*.h" \
+        -not -path '*-exec-*' \
+        -not -path '*/external/*' \
+        -not -path '*darwin_arm64-opt/bin/*' \
+        2>/dev/null | while read -r f; do
+        # Extract relative path from "bin/" onward
+        local rel
+        rel=$(echo "$f" | sed -n 's|.*/bin/\(runtime/.*\)|\1|p')
+        if [ -n "${rel}" ] && [ ! -f "${dest_headers}/${rel}" ]; then
+            mkdir -p "${dest_headers}/$(dirname "$rel")"
+            cp "$f" "${dest_headers}/$rel" 2>/dev/null || cat "$f" > "${dest_headers}/$rel" 2>/dev/null || true
         fi
-    done
+    done) || true
 
     # -----------------------------------------------------------------------
     # C) External dependency headers
@@ -253,37 +242,48 @@ collect_headers() {
         done
     fi
 
-    # Broad fallback: find build_config.h anywhere in bazel output for litert.
-    # Bazel _virtual_includes are symlink farms — use cp -L to dereference.
+    # Broad fallback: find build_config.h anywhere in bazel output.
+    # _virtual_includes are dangling symlinks — skip them, find real files only.
     if [ ! -f "${dest_headers}/litert/build_common/build_config.h" ]; then
-        log "build_config.h not found yet, searching broadly..."
+        log "build_config.h not found yet, searching broadly (real files only)..."
         local found_bc=""
         found_bc=$(find "${output_base}" -name 'build_config.h' \
             -path '*/litert/build_common/*' \
-            -not -type d 2>/dev/null | head -1) || true
+            -not -path '*_virtual_includes*' \
+            -type f 2>/dev/null | head -1) || true
         if [ -n "${found_bc}" ]; then
             log "  Found build_config.h at: ${found_bc}"
             mkdir -p "${dest_headers}/litert/build_common"
-            # Use cat to bypass symlink issues
-            cat "${found_bc}" > "${dest_headers}/litert/build_common/build_config.h" 2>/dev/null || \
-                cp -L "${found_bc}" "${dest_headers}/litert/build_common/build_config.h" 2>/dev/null || \
-                log "  WARNING: could not copy build_config.h"
+            cp "${found_bc}" "${dest_headers}/litert/build_common/build_config.h"
         else
-            log "  WARNING: build_config.h not found anywhere in output_base"
+            # Last resort: generate a minimal stub
+            log "  WARNING: build_config.h not found, generating minimal stub"
+            mkdir -p "${dest_headers}/litert/build_common"
+            cat > "${dest_headers}/litert/build_common/build_config.h" << 'STUBEOF'
+#ifndef THIRD_PARTY_ODML_LITERT_LITERT_BUILD_COMMON_BUILD_CONFIG_H_
+#define THIRD_PARTY_ODML_LITERT_LITERT_BUILD_COMMON_BUILD_CONFIG_H_
+// Auto-generated stub for iOS xcframework build.
+// The real build_config.h is generated by Bazel but lives in _virtual_includes
+// symlinks that cannot be dereferenced outside the build tree.
+#endif  // THIRD_PARTY_ODML_LITERT_LITERT_BUILD_COMMON_BUILD_CONFIG_H_
+STUBEOF
         fi
     fi
 
-    # Also grab any other _virtual_includes headers from litert that we need
-    log "Copying LiteRT virtual include headers..."
-    while IFS= read -r f; do
-        # Extract path from the last 'litert/' segment onward
+    # Copy LiteRT generated headers from bazel-out (non-virtual, real files)
+    log "Copying LiteRT generated headers from bazel-out..."
+    (find "${execroot}/bazel-out" -path "*/bin/external/litert/*.h" \
+        -not -path '*_virtual_includes*' \
+        -not -path '*-exec-*' \
+        -type f 2>/dev/null | while read -r f; do
+        # Extract path relative to external/litert/
         local rel
-        rel=$(echo "$f" | sed -n 's|.*_virtual_includes/[^/]*/\(.*\)|\1|p')
+        rel=$(echo "$f" | sed -n 's|.*/external/litert/\(.*\)|\1|p')
         if [ -n "${rel}" ] && [ ! -f "${dest_headers}/${rel}" ]; then
             mkdir -p "${dest_headers}/$(dirname "$rel")"
-            cat "$f" > "${dest_headers}/${rel}" 2>/dev/null || true
+            cp "$f" "${dest_headers}/$rel" 2>/dev/null || true
         fi
-    done < <(find "${output_base}" -path '*/external/litert/*/_virtual_includes/*' -name '*.h' 2>/dev/null | head -200) || true
+    done) || true
 
     # Google protobuf headers
     if [ -d "${bazel_external}/com_google_protobuf/src/google" ]; then
