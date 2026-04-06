@@ -37,9 +37,7 @@ jobs:
         uses: actions/cache/restore@v4
         id: bazel-cache
         with:
-          path: |
-            ~/.cache/bazel-ios-arm64
-            ~/.cache/bazel-ios-sim
+          path: ~/.cache/bazel-ios
           key: ${{ steps.cache-keys.outputs.key }}
           restore-keys: |
             bazel-ios-${{ env.LITERT_LM_VERSION }}-${{ runner.os }}-
@@ -80,7 +78,5 @@ jobs:
         uses: actions/cache/save@v4
         if: always()
         with:
-          path: |
-            ~/.cache/bazel-ios-arm64
-            ~/.cache/bazel-ios-sim
+          path: ~/.cache/bazel-ios
           key: ${{ steps.cache-keys.outputs.key }}

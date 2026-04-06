@@ -13,9 +13,8 @@ WORK_DIR="${WORK_DIR:-$(pwd)/build}"
 LITERT_LM_DIR="${WORK_DIR}/LiteRT-LM"
 OUTPUT_DIR="${WORK_DIR}/output"
 
-# Bazel disk cache directories (separate per arch to avoid conflicts)
-CACHE_ARM64="${HOME}/.cache/bazel-ios-arm64"
-CACHE_SIM="${HOME}/.cache/bazel-ios-sim"
+# Single shared Bazel disk cache - both iOS builds share exec-config toolchain blobs
+CACHE_DIR="${HOME}/.cache/bazel-ios"
 
 log() { echo "==> $*"; }
 
@@ -57,7 +56,6 @@ BUILDEOF
 # ---------------------------------------------------------------------------
 build_for_config() {
     local config="$1"       # e.g. ios_arm64 or ios_sim_arm64
-    local cache_dir="$2"
 
     log "Building for config=${config}..."
     cd "${LITERT_LM_DIR}"
@@ -66,7 +64,7 @@ build_for_config() {
     # pass the config so that the .bazelrc iOS flags apply (min OS, C++20, etc.)
     bazel build \
         --config="${config}" \
-        --disk_cache="${cache_dir}" \
+        --disk_cache="${CACHE_DIR}" \
         --build_tag_filters=-requires-mac-inputs:hard,-no_mac \
         //ios_package:LiteRTLM \
         -- \
@@ -260,12 +258,12 @@ main() {
     inject_build_target
 
     # Build ios_arm64 (device)
-    build_for_config "ios_arm64" "${CACHE_ARM64}"
+    build_for_config "ios_arm64"
     collect_libs "ios_arm64"
     collect_headers "ios_arm64"
 
     # Build ios_sim_arm64 (simulator on Apple Silicon)
-    build_for_config "ios_sim_arm64" "${CACHE_SIM}"
+    build_for_config "ios_sim_arm64"
     collect_libs "ios_sim_arm64"
     collect_headers "ios_sim_arm64"
 
