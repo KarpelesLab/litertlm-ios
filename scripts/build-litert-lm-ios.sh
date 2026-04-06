@@ -72,10 +72,10 @@ build_for_config() {
         -//schema/py:* \
         -//kotlin/...
 
-    # Also build the proto and litert_lm_lib targets directly (without the
-    # apple_static_library platform transition) so their generated .pb.h
-    # headers land in the predictable bazel-bin path for collection.
-    log "Building proto targets for header generation..."
+    # Also build proto + CXX bridge targets directly (without the
+    # apple_static_library platform transition) so generated headers
+    # (.pb.h, .rs.h) land in the predictable bazel-bin path for collection.
+    log "Building proto + generated header targets..."
     bazel build \
         --config="${config}" \
         --disk_cache="${CACHE_DIR}" \
@@ -86,6 +86,7 @@ build_for_config() {
         //runtime/proto:llm_model_type_cc_proto \
         //runtime/proto:token_cc_proto \
         //runtime/proto:litert_lm_metrics_cc_proto \
+        //runtime/components:prompt_template \
         -- \
         -//python/... \
         -//schema/py:* \
@@ -221,6 +222,31 @@ collect_headers() {
     local proto_count
     proto_count=$(find "${dest_headers}/runtime/proto" -name '*.pb.h' 2>/dev/null | wc -l | tr -d ' ')
     log "  Found ${proto_count} proto-generated headers"
+
+    # Rust CXX bridge generated headers (e.g. minijinja_template.rs.h)
+    log "  Collecting Rust CXX bridge generated headers..."
+    (find "${execroot}/bazel-out" -name '*.rs.h' \
+        -path '*/bin/runtime/*' \
+        -not -path '*-exec-*' \
+        -not -path '*darwin_arm64-opt/bin/*' \
+        -type f 2>/dev/null | while read -r f; do
+        local rel
+        rel=$(echo "$f" | sed -n 's|.*/bin/\(runtime/.*\)|\1|p')
+        if [ -n "${rel}" ] && [ ! -f "${dest_headers}/${rel}" ]; then
+            log "    Found: ${rel}"
+            mkdir -p "${dest_headers}/$(dirname "$rel")"
+            cp "$f" "${dest_headers}/$rel" 2>/dev/null || true
+        fi
+    done) || true
+    # Also check bazel-bin directly
+    (find "${bazel_bin}" -name '*.rs.h' -path '*/runtime/*' -type f 2>/dev/null | while read -r f; do
+        local rel="${f#"${bazel_bin}/"}"
+        if [ ! -f "${dest_headers}/${rel}" ]; then
+            log "    Found in bazel-bin: ${rel}"
+            mkdir -p "${dest_headers}/$(dirname "$rel")"
+            cp "$f" "${dest_headers}/$rel" 2>/dev/null || true
+        fi
+    done) || true
 
     # -----------------------------------------------------------------------
     # C) External dependency headers
