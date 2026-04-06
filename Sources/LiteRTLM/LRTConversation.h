@@ -43,9 +43,6 @@ NS_ASSUME_NONNULL_BEGIN
 /// For example, a "thinking" channel with <thinking>...</thinking> delimiters.
 @property (nonatomic, strong, nullable) NSArray<LRTChannel *> *channels;
 
-/// Whether to filter channel content from the KV cache.
-@property (nonatomic) BOOL filterChannelContentFromKvCache;
-
 + (instancetype)defaultConfig;
 
 @end

@@ -124,7 +124,6 @@ static NSDictionary *NSDictionaryFromNlohmann(const nlohmann::ordered_json &j) {
     c.temperature = 0.8f;
     c.topK = 40;
     c.topP = 0.95f;
-    c.filterChannelContentFromKvCache = NO;
     return c;
 }
 
@@ -143,9 +142,9 @@ static litert::lm::LlgConstraintType LlgTypeFromObjC(LRTConstraintType type) {
     return litert::lm::LlgConstraintType::kJsonSchema;
 }
 
-static litert::lm::Conversation::OptionalArgs OptionalArgsWithConstraint(
+static litert::lm::OptionalArgs OptionalArgsWithConstraint(
     LRTConstraint *_Nullable constraint) {
-    litert::lm::Conversation::OptionalArgs args;
+    litert::lm::OptionalArgs args;
     if (constraint) {
         litert::lm::LlGuidanceConstraintArg constraintArg;
         constraintArg.constraint_type = LlgTypeFromObjC(constraint.type);
@@ -242,7 +241,6 @@ static litert::lm::Conversation::OptionalArgs OptionalArgsWithConstraint(
             cppChannels.push_back(std::move(c));
         }
         builder.SetChannels(cppChannels);
-        builder.SetFilterChannelContentFromKvCache(config.filterChannelContentFromKvCache);
     }
 
     // Constrained decoding config (LlGuidance)
@@ -280,7 +278,7 @@ static litert::lm::Conversation::OptionalArgs OptionalArgsWithConstraint(
 }
 
 - (nullable NSString *)sendMessage:(NSString *)message
-                        constraint:(nullable LRTConstraint *)constraint
+                        constraint:(LRTConstraint *)constraint
                              error:(NSError **)error {
     if (!_conversation) {
         if (error) *error = [NSError errorWithDomain:LRTErrorDomain code:-1
@@ -314,7 +312,7 @@ static litert::lm::Conversation::OptionalArgs OptionalArgsWithConstraint(
 }
 
 - (BOOL)sendMessageAsync:(NSString *)message
-               constraint:(nullable LRTConstraint *)constraint
+               constraint:(LRTConstraint *)constraint
                  callback:(LRTConversationStreamCallback)callback
                     error:(NSError **)error {
     if (!_conversation) {
