@@ -62,11 +62,30 @@ collect_libs() {
 
     log "Collecting .a files for ${config_label}..."
 
-    # Resolve the actual bazel-bin path (it's a symlink)
+    # bazel info bazel-bin (without --config) returns the HOST output dir,
+    # not the cross-compiled one. Pass --config to get the correct path.
     local bazel_bin
-    bazel_bin="$(bazel info bazel-bin 2>/dev/null || echo "bazel-bin")"
+    bazel_bin="$(bazel info bazel-bin --config="${config_label}" 2>/dev/null || true)"
 
-    # Find all .a files, excluding test and benchmark artifacts
+    # Fallback: search bazel-out for platform-specific output directory
+    if [ -z "${bazel_bin}" ] || [ ! -d "${bazel_bin}" ]; then
+        log "bazel info --config failed, searching bazel-out for ${config_label}..."
+        local output_base
+        output_base="$(bazel info output_base 2>/dev/null)"
+        bazel_bin="$(find "${output_base}/execroot" -type d -name "bin" \
+            -path "*/${config_label}-*" 2>/dev/null | head -1)"
+    fi
+
+    if [ -z "${bazel_bin}" ] || [ ! -d "${bazel_bin}" ]; then
+        log "Still no dir found, doing broad search excluding host configs..."
+        local output_base
+        output_base="$(bazel info output_base 2>/dev/null)"
+        bazel_bin="${output_base}/execroot"
+    fi
+
+    log "Searching for .a files in: ${bazel_bin}"
+
+    # Find all .a files, excluding test/benchmark/host artifacts
     local -a archives=()
     while IFS= read -r -d '' f; do
         archives+=("$f")
@@ -76,10 +95,20 @@ collect_libs() {
         -not -path '*python*' \
         -not -path '*kotlin*' \
         -not -path '*schema/py*' \
+        -not -path '*/host/*' \
+        -not -path '*darwin_arm64*' \
+        -not -path '*k8-*' \
+        -not -path '*-exec-*' \
         -print0 2>/dev/null)
 
     if [ ${#archives[@]} -eq 0 ]; then
         echo "ERROR: No .a files found in ${bazel_bin}" >&2
+        echo "DEBUG: Listing bazel-out directories:" >&2
+        local output_base
+        output_base="$(bazel info output_base 2>/dev/null)"
+        find "${output_base}/execroot" -maxdepth 5 -type d -name "bin" 2>/dev/null >&2 || true
+        echo "DEBUG: Sample .a files anywhere in output:" >&2
+        find "${output_base}/execroot" -name "*.a" 2>/dev/null | head -20 >&2 || true
         exit 1
     fi
 
@@ -137,10 +166,10 @@ collect_headers() {
         fi
     done
 
-    # Copy proto-generated headers from bazel-bin
+    # Copy proto-generated headers from bazel-bin (use the cross-compiled config)
     local bazel_bin
-    bazel_bin="$(bazel info bazel-bin 2>/dev/null || echo "bazel-bin")"
-    if [ -d "${bazel_bin}/runtime/proto" ]; then
+    bazel_bin="$(bazel info bazel-bin --config="${config_label}" 2>/dev/null || true)"
+    if [ -n "${bazel_bin}" ] && [ -d "${bazel_bin}/runtime/proto" ]; then
         mkdir -p "${dest_headers}/runtime/proto"
         find "${bazel_bin}/runtime/proto" -name '*.h' -exec cp {} "${dest_headers}/runtime/proto/" \; 2>/dev/null || true
     fi
