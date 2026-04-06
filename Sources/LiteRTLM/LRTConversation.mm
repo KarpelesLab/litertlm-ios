@@ -5,6 +5,7 @@
 #include "runtime/engine/engine_settings.h"
 #include "runtime/conversation/conversation.h"
 #include "runtime/conversation/io_types.h"
+#include "runtime/components/constrained_decoding/constraint_provider_config.h"
 
 #include <memory>
 #include <string>
@@ -122,10 +123,36 @@ static NSDictionary *NSDictionaryFromNlohmann(const nlohmann::ordered_json &j) {
     c.temperature = 0.8f;
     c.topK = 40;
     c.topP = 0.95f;
+    c.filterChannelContentFromKvCache = NO;
     return c;
 }
 
 @end
+
+// ---------------------------------------------------------------------------
+// Constraint helper
+// ---------------------------------------------------------------------------
+
+static litert::lm::LlgConstraintType LlgTypeFromObjC(LRTConstraintType type) {
+    switch (type) {
+        case LRTConstraintTypeRegex:      return litert::lm::LlgConstraintType::kRegex;
+        case LRTConstraintTypeJsonSchema: return litert::lm::LlgConstraintType::kJsonSchema;
+        case LRTConstraintTypeLark:       return litert::lm::LlgConstraintType::kLark;
+    }
+    return litert::lm::LlgConstraintType::kJsonSchema;
+}
+
+static litert::lm::Conversation::OptionalArgs OptionalArgsWithConstraint(
+    LRTConstraint *_Nullable constraint) {
+    litert::lm::Conversation::OptionalArgs args;
+    if (constraint) {
+        litert::lm::LlGuidanceConstraintArg constraintArg;
+        constraintArg.constraint_type = LlgTypeFromObjC(constraint.type);
+        constraintArg.constraint_string = std::string([constraint.definition UTF8String]);
+        args.decoding_constraint = litert::lm::ConstraintArg(constraintArg);
+    }
+    return args;
+}
 
 // ---------------------------------------------------------------------------
 // Internal: access C++ engine from LRTEngine
@@ -203,6 +230,27 @@ static NSDictionary *NSDictionaryFromNlohmann(const nlohmann::ordered_json &j) {
     builder.SetEnableConstrainedDecoding(config.enableConstrainedDecoding);
     builder.SetPrefillPrefaceOnInit(config.prefillPrefaceOnInit);
 
+    // Channels
+    if (config.channels.count > 0) {
+        std::vector<litert::lm::Channel> cppChannels;
+        for (LRTChannel *ch in config.channels) {
+            litert::lm::Channel c;
+            c.channel_name = std::string([ch.name UTF8String]);
+            c.start = std::string([ch.startDelimiter UTF8String]);
+            c.end = std::string([ch.endDelimiter UTF8String]);
+            cppChannels.push_back(std::move(c));
+        }
+        builder.SetChannels(cppChannels);
+        builder.SetFilterChannelContentFromKvCache(config.filterChannelContentFromKvCache);
+    }
+
+    // Constrained decoding config (LlGuidance)
+    if (config.enableConstrainedDecoding) {
+        litert::lm::LlGuidanceConfig llgConfig;
+        builder.SetConstraintProviderConfig(
+            litert::lm::ConstraintProviderConfig(llgConfig));
+    }
+
     auto convConfigResult = builder.Build(*cppEngine);
     if (!convConfigResult.ok()) {
         if (error) *error = NSErrorFromAbslStatus(convConfigResult.status());
@@ -227,37 +275,47 @@ static NSDictionary *NSDictionaryFromNlohmann(const nlohmann::ordered_json &j) {
 // -- Messaging --------------------------------------------------------------
 
 - (nullable NSString *)sendMessage:(NSString *)message error:(NSError **)error {
+    return [self sendMessage:message constraint:nil error:error];
+}
+
+- (nullable NSString *)sendMessage:(NSString *)message
+                        constraint:(nullable LRTConstraint *)constraint
+                             error:(NSError **)error {
     if (!_conversation) {
         if (error) *error = [NSError errorWithDomain:LRTErrorDomain code:-1
                                             userInfo:@{NSLocalizedDescriptionKey: @"Conversation not initialized"}];
         return nil;
     }
 
-    // Build a JsonMessage
     nlohmann::ordered_json msgJson = nlohmann::ordered_json::object();
     msgJson["role"] = "user";
     msgJson["content"] = std::string([message UTF8String]);
     litert::lm::Message msg = litert::lm::JsonMessage(msgJson);
 
-    auto result = _conversation->SendMessage(msg);
+    auto optArgs = OptionalArgsWithConstraint(constraint);
+    auto result = _conversation->SendMessage(msg, optArgs);
     if (!result.ok()) {
         if (error) *error = NSErrorFromAbslStatus(result.status());
         return nil;
     }
 
-    // Extract text from the response message
     const auto &responseJson = std::get<litert::lm::JsonMessage>(*result);
     if (responseJson.contains("content") && responseJson["content"].is_string()) {
         return @(responseJson["content"].get<std::string>().c_str());
     }
-
-    // Fallback: dump the whole response as JSON string
     return @(responseJson.dump().c_str());
 }
 
 - (BOOL)sendMessageAsync:(NSString *)message
                 callback:(LRTConversationStreamCallback)callback
                    error:(NSError **)error {
+    return [self sendMessageAsync:message constraint:nil callback:callback error:error];
+}
+
+- (BOOL)sendMessageAsync:(NSString *)message
+               constraint:(nullable LRTConstraint *)constraint
+                 callback:(LRTConversationStreamCallback)callback
+                    error:(NSError **)error {
     if (!_conversation) {
         if (error) *error = [NSError errorWithDomain:LRTErrorDomain code:-1
                                             userInfo:@{NSLocalizedDescriptionKey: @"Conversation not initialized"}];
@@ -269,6 +327,7 @@ static NSDictionary *NSDictionaryFromNlohmann(const nlohmann::ordered_json &j) {
     msgJson["content"] = std::string([message UTF8String]);
     litert::lm::Message msg = litert::lm::JsonMessage(msgJson);
 
+    auto optArgs = OptionalArgsWithConstraint(constraint);
     LRTConversationStreamCallback callbackCopy = [callback copy];
 
     auto status = _conversation->SendMessageAsync(
@@ -299,7 +358,8 @@ static NSDictionary *NSDictionaryFromNlohmann(const nlohmann::ordered_json &j) {
                     callbackCopy(token, nil);
                 });
             }
-        });
+        },
+        optArgs);
 
     if (!status.ok()) {
         if (error) *error = NSErrorFromAbslStatus(status);

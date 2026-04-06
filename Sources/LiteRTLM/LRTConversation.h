@@ -6,17 +6,16 @@ NS_ASSUME_NONNULL_BEGIN
 @class LRTEngine;
 
 /// Configuration for creating a conversation.
-/// Uses a builder pattern — set properties then call buildWithEngine:error:.
 @interface LRTConversationConfig : NSObject
 
-/// System prompt / preface text. Set before building.
+/// System prompt / preface text.
 @property (nonatomic, copy, nullable) NSString *systemPrompt;
 
 /// Tool definitions as a JSON array of tool objects.
 /// Each tool should have "name", "description", "parameters" keys.
 @property (nonatomic, strong, nullable) NSArray<NSDictionary *> *tools;
 
-/// Whether to enable constrained decoding (for function calling).
+/// Whether to enable constrained decoding (for function calling / structured output).
 @property (nonatomic) BOOL enableConstrainedDecoding;
 
 /// Prefill the system prompt on init (faster first response, slower init).
@@ -40,6 +39,13 @@ NS_ASSUME_NONNULL_BEGIN
 /// Top-P (nucleus) sampling.
 @property (nonatomic) float topP;
 
+/// Output channels for separating model output into named streams.
+/// For example, a "thinking" channel with <thinking>...</thinking> delimiters.
+@property (nonatomic, strong, nullable) NSArray<LRTChannel *> *channels;
+
+/// Whether to filter channel content from the KV cache.
+@property (nonatomic) BOOL filterChannelContentFromKvCache;
+
 + (instancetype)defaultConfig;
 
 @end
@@ -51,7 +57,7 @@ typedef void (^LRTConversationStreamCallback)(NSString *_Nullable token, NSError
 
 /// LRTConversation wraps the LiteRT-LM Conversation C++ class.
 /// Provides a higher-level chat interface with prompt template handling,
-/// conversation history, and optional tool use.
+/// conversation history, and optional tool use / constrained decoding.
 @interface LRTConversation : NSObject
 
 /// Create a conversation with default configuration.
@@ -63,18 +69,32 @@ typedef void (^LRTConversationStreamCallback)(NSString *_Nullable token, NSError
                                          config:(LRTConversationConfig *)config
                                           error:(NSError **)error;
 
+// -- Messaging --------------------------------------------------------------
+
 /// Send a text message and get the complete response (blocking).
 - (nullable NSString *)sendMessage:(NSString *)message
                              error:(NSError **)error;
 
+/// Send a text message with a constraint on the output format (blocking).
+/// For example, pass [LRTConstraint jsonSchemaConstraint:schema] to get valid JSON.
+- (nullable NSString *)sendMessage:(NSString *)message
+                        constraint:(LRTConstraint *)constraint
+                             error:(NSError **)error;
+
 /// Send a text message with streaming response (non-blocking).
-/// Callback receives tokens as they are generated.
 - (BOOL)sendMessageAsync:(NSString *)message
                 callback:(LRTConversationStreamCallback)callback
                    error:(NSError **)error;
 
+/// Send a text message with streaming and a constraint.
+- (BOOL)sendMessageAsync:(NSString *)message
+               constraint:(nullable LRTConstraint *)constraint
+                 callback:(LRTConversationStreamCallback)callback
+                    error:(NSError **)error;
+
+// -- History & state --------------------------------------------------------
+
 /// Get the conversation history as an array of JSON-compatible dictionaries.
-/// Each entry has "role" and "content" keys.
 @property (nonatomic, readonly) NSArray<NSDictionary *> *history;
 
 /// Clone this conversation. The clone has the same history and context.

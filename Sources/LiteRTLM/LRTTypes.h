@@ -81,11 +81,54 @@ typedef id LRTInputContent; // LRTInputText | LRTInputImage | LRTInputAudio
 + (instancetype)defaultConfig;
 @end
 
+/// Constraint type for constrained decoding.
+typedef NS_ENUM(NSInteger, LRTConstraintType) {
+    LRTConstraintTypeRegex,       ///< Output must match a regular expression.
+    LRTConstraintTypeJsonSchema,  ///< Output must match a JSON schema.
+    LRTConstraintTypeLark,        ///< Output must match a Lark grammar.
+};
+
+/// A decoding constraint that restricts model output to a specific format.
+/// Use with LRTDecodeConfig or LRTConversationConfig for structured output.
+@interface LRTConstraint : NSObject
+/// The constraint type.
+@property (nonatomic, readonly) LRTConstraintType type;
+/// The constraint definition (regex pattern, JSON schema string, or Lark grammar).
+@property (nonatomic, copy, readonly) NSString *definition;
+
+/// Create a JSON schema constraint. The model output will be valid JSON matching the schema.
+/// @param jsonSchema A JSON schema string (e.g. '{"type":"object","properties":{"name":{"type":"string"}}}')
++ (instancetype)jsonSchemaConstraint:(NSString *)jsonSchema;
+
+/// Create a regex constraint. The model output will match the pattern.
++ (instancetype)regexConstraint:(NSString *)pattern;
+
+/// Create a Lark grammar constraint.
++ (instancetype)larkConstraint:(NSString *)grammar;
+@end
+
 /// Per-call decode configuration.
 @interface LRTDecodeConfig : NSObject
 @property (nonatomic) NSInteger maxOutputTokens;
+/// Optional constraint to enforce structured output.
+@property (nonatomic, strong, nullable) LRTConstraint *constraint;
 
 + (instancetype)defaultConfig;
+@end
+
+/// A named output channel with start/end delimiters.
+/// Channels separate model output into logical streams (e.g. "thinking" vs response).
+@interface LRTChannel : NSObject
+/// Channel identifier (e.g. "thinking").
+@property (nonatomic, copy, readonly) NSString *name;
+/// Delimiter marking channel start (e.g. "<thinking>").
+@property (nonatomic, copy, readonly) NSString *startDelimiter;
+/// Delimiter marking channel end (e.g. "</thinking>").
+@property (nonatomic, copy, readonly) NSString *endDelimiter;
+
++ (instancetype)channelWithName:(NSString *)name
+                 startDelimiter:(NSString *)start
+                   endDelimiter:(NSString *)end;
 @end
 
 // ---------------------------------------------------------------------------

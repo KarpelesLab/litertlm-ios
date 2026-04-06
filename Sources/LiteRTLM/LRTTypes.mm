@@ -63,12 +63,51 @@
 
 @end
 
+@implementation LRTConstraint
+
++ (instancetype)jsonSchemaConstraint:(NSString *)jsonSchema {
+    LRTConstraint *c = [[LRTConstraint alloc] init];
+    c->_type = LRTConstraintTypeJsonSchema;
+    c->_definition = [jsonSchema copy];
+    return c;
+}
+
++ (instancetype)regexConstraint:(NSString *)pattern {
+    LRTConstraint *c = [[LRTConstraint alloc] init];
+    c->_type = LRTConstraintTypeRegex;
+    c->_definition = [pattern copy];
+    return c;
+}
+
++ (instancetype)larkConstraint:(NSString *)grammar {
+    LRTConstraint *c = [[LRTConstraint alloc] init];
+    c->_type = LRTConstraintTypeLark;
+    c->_definition = [grammar copy];
+    return c;
+}
+
+@end
+
 @implementation LRTDecodeConfig
 
 + (instancetype)defaultConfig {
     LRTDecodeConfig *config = [[LRTDecodeConfig alloc] init];
     config.maxOutputTokens = -1; // use session default
     return config;
+}
+
+@end
+
+@implementation LRTChannel
+
++ (instancetype)channelWithName:(NSString *)name
+                 startDelimiter:(NSString *)start
+                   endDelimiter:(NSString *)end {
+    LRTChannel *ch = [[LRTChannel alloc] init];
+    ch->_name = [name copy];
+    ch->_startDelimiter = [start copy];
+    ch->_endDelimiter = [end copy];
+    return ch;
 }
 
 @end
