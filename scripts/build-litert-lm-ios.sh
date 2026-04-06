@@ -3,6 +3,9 @@ set -euo pipefail
 
 # Build LiteRT-LM for iOS (arm64 device + arm64 simulator)
 # Produces an xcframework with static libraries and headers.
+#
+# Strategy: inject an apple_static_library BUILD target into the LiteRT-LM
+# checkout that bundles all transitive deps into a single .a file per arch.
 
 LITERT_LM_VERSION="${LITERT_LM_VERSION:-v0.10.1}"
 LITERT_LM_REPO="https://github.com/google-ai-edge/LiteRT-LM.git"
@@ -17,7 +20,7 @@ CACHE_SIM="${HOME}/.cache/bazel-ios-sim"
 log() { echo "==> $*"; }
 
 # ---------------------------------------------------------------------------
-# 1. Clone / update LiteRT-LM
+# 1. Clone LiteRT-LM and inject our custom BUILD target
 # ---------------------------------------------------------------------------
 clone_litert_lm() {
     log "Cloning LiteRT-LM ${LITERT_LM_VERSION}..."
@@ -27,8 +30,30 @@ clone_litert_lm() {
     git clone --depth 1 --branch "${LITERT_LM_VERSION}" "${LITERT_LM_REPO}" "${LITERT_LM_DIR}"
 }
 
+inject_build_target() {
+    log "Injecting apple_static_library BUILD target..."
+    mkdir -p "${LITERT_LM_DIR}/ios_package"
+
+    cat > "${LITERT_LM_DIR}/ios_package/BUILD" << 'BUILDEOF'
+load("@build_bazel_rules_apple//apple:apple.bzl", "apple_static_library")
+
+# Produces a single .a containing litert_lm_lib and ALL transitive deps.
+# Build with: bazel build --config=ios_arm64 //ios_package:LiteRTLM
+apple_static_library(
+    name = "LiteRTLM",
+    minimum_os_version = "13.0",
+    platform_type = "ios",
+    deps = [
+        "//runtime/engine:litert_lm_lib",
+    ],
+)
+BUILDEOF
+
+    log "BUILD target injected at ios_package/BUILD"
+}
+
 # ---------------------------------------------------------------------------
-# 2. Build for a given iOS config
+# 2. Build for a given iOS config using the injected target
 # ---------------------------------------------------------------------------
 build_for_config() {
     local config="$1"       # e.g. ios_arm64 or ios_sim_arm64
@@ -37,11 +62,13 @@ build_for_config() {
     log "Building for config=${config}..."
     cd "${LITERT_LM_DIR}"
 
+    # apple_static_library handles platform/arch internally, but we still
+    # pass the config so that the .bazelrc iOS flags apply (min OS, C++20, etc.)
     bazel build \
         --config="${config}" \
         --disk_cache="${cache_dir}" \
         --build_tag_filters=-requires-mac-inputs:hard,-no_mac \
-        //runtime/engine:litert_lm_lib \
+        //ios_package:LiteRTLM \
         -- \
         -//python/... \
         -//schema/py:* \
@@ -51,7 +78,7 @@ build_for_config() {
 }
 
 # ---------------------------------------------------------------------------
-# 3. Collect static libraries from bazel-bin into a single .a
+# 3. Collect the apple_static_library output
 # ---------------------------------------------------------------------------
 collect_libs() {
     local config_label="$1"   # e.g. "ios_arm64"
@@ -60,64 +87,76 @@ collect_libs() {
 
     cd "${LITERT_LM_DIR}"
 
-    log "Collecting .a files for ${config_label}..."
+    log "Collecting library for ${config_label}..."
 
-    # bazel info bazel-bin (without --config) returns the HOST output dir,
-    # not the cross-compiled one. Pass --config to get the correct path.
+    # apple_static_library output goes to bazel-bin/ios_package/
+    # The output name follows: LiteRTLM_<lipo-platform>.a
+    # Try multiple possible output paths
     local bazel_bin
     bazel_bin="$(bazel info bazel-bin --config="${config_label}" 2>/dev/null || true)"
 
-    # Fallback: search bazel-out for platform-specific output directory
+    # If that didn't work, try without config (apple_static_library may use host bin)
     if [ -z "${bazel_bin}" ] || [ ! -d "${bazel_bin}" ]; then
-        log "bazel info --config failed, searching bazel-out for ${config_label}..."
-        local output_base
-        output_base="$(bazel info output_base 2>/dev/null)"
-        bazel_bin="$(find "${output_base}/execroot" -type d -name "bin" \
-            -path "*/${config_label}-*" 2>/dev/null | head -1)"
+        bazel_bin="$(bazel info bazel-bin 2>/dev/null || echo "bazel-bin")"
     fi
 
-    if [ -z "${bazel_bin}" ] || [ ! -d "${bazel_bin}" ]; then
-        log "Still no dir found, doing broad search excluding host configs..."
-        local output_base
-        output_base="$(bazel info output_base 2>/dev/null)"
-        bazel_bin="${output_base}/execroot"
-    fi
+    log "Looking in bazel-bin: ${bazel_bin}"
 
-    log "Searching for .a files in: ${bazel_bin}"
+    # apple_static_library produces output in bazel-bin/ios_package/
+    # The .a might be named LiteRTLM_lipo.a or similar
+    local found_lib=""
 
-    # Find all .a files, excluding test/benchmark/host artifacts
-    local -a archives=()
+    # Search for the output .a file
     while IFS= read -r -d '' f; do
-        archives+=("$f")
-    done < <(find "${bazel_bin}" -name '*.a' \
-        -not -path '*_test*' \
-        -not -path '*benchmark*' \
-        -not -path '*python*' \
-        -not -path '*kotlin*' \
-        -not -path '*schema/py*' \
-        -not -path '*/host/*' \
-        -not -path '*darwin_arm64*' \
-        -not -path '*k8-*' \
-        -not -path '*-exec-*' \
-        -print0 2>/dev/null)
+        if [ -z "${found_lib}" ]; then
+            found_lib="$f"
+        fi
+    done < <(find "${bazel_bin}/ios_package" -name '*.a' -print0 2>/dev/null)
 
-    if [ ${#archives[@]} -eq 0 ]; then
-        echo "ERROR: No .a files found in ${bazel_bin}" >&2
-        echo "DEBUG: Listing bazel-out directories:" >&2
+    # Broader search if not found in expected location
+    if [ -z "${found_lib}" ]; then
+        log "Not found in ios_package/, searching broader..."
         local output_base
         output_base="$(bazel info output_base 2>/dev/null)"
-        find "${output_base}/execroot" -maxdepth 5 -type d -name "bin" 2>/dev/null >&2 || true
-        echo "DEBUG: Sample .a files anywhere in output:" >&2
-        find "${output_base}/execroot" -name "*.a" 2>/dev/null | head -20 >&2 || true
+        while IFS= read -r -d '' f; do
+            if [ -z "${found_lib}" ]; then
+                found_lib="$f"
+            fi
+        done < <(find "${output_base}/execroot" -path "*/ios_package/*" -name '*.a' \
+            -not -path '*-exec-*' -print0 2>/dev/null)
+    fi
+
+    # Even broader: find any LiteRTLM*.a
+    if [ -z "${found_lib}" ]; then
+        log "Searching all of bazel-out for LiteRTLM..."
+        local output_base
+        output_base="$(bazel info output_base 2>/dev/null)"
+        while IFS= read -r -d '' f; do
+            log "  candidate: $f ($(du -h "$f" | cut -f1))"
+            if [ -z "${found_lib}" ]; then
+                found_lib="$f"
+            fi
+        done < <(find "${output_base}/execroot" -name 'LiteRTLM*' -name '*.a' \
+            -not -path '*-exec-*' -print0 2>/dev/null)
+    fi
+
+    if [ -z "${found_lib}" ]; then
+        echo "ERROR: Could not find apple_static_library output" >&2
+        echo "DEBUG: Contents of bazel-bin/ios_package/:" >&2
+        ls -laR "${bazel_bin}/ios_package/" 2>/dev/null >&2 || echo "  (directory not found)" >&2
+        echo "DEBUG: All .a files in output:" >&2
+        local output_base
+        output_base="$(bazel info output_base 2>/dev/null)"
+        find "${output_base}/execroot" -name "*.a" -not -path '*-exec-*' 2>/dev/null | head -30 >&2 || true
         exit 1
     fi
 
-    log "Found ${#archives[@]} archives, combining..."
+    log "Found library: ${found_lib} ($(du -h "${found_lib}" | cut -f1))"
+    cp "${found_lib}" "${dest_dir}/liblitert_lm.a"
 
-    # Combine all archives into one
-    libtool -static -o "${dest_dir}/liblitert_lm.a" "${archives[@]}" 2>/dev/null
-
-    log "Combined library: $(du -h "${dest_dir}/liblitert_lm.a" | cut -f1)"
+    # Verify it's the right architecture
+    log "Architecture info:"
+    lipo -info "${dest_dir}/liblitert_lm.a" 2>/dev/null || file "${dest_dir}/liblitert_lm.a"
 }
 
 # ---------------------------------------------------------------------------
@@ -166,22 +205,24 @@ collect_headers() {
         fi
     done
 
-    # Copy proto-generated headers from bazel-bin (use the cross-compiled config)
+    # Copy proto-generated headers from bazel-bin
     local bazel_bin
     bazel_bin="$(bazel info bazel-bin --config="${config_label}" 2>/dev/null || true)"
-    if [ -n "${bazel_bin}" ] && [ -d "${bazel_bin}/runtime/proto" ]; then
+    if [ -z "${bazel_bin}" ]; then
+        bazel_bin="$(bazel info bazel-bin 2>/dev/null || echo "bazel-bin")"
+    fi
+    if [ -d "${bazel_bin}/runtime/proto" ]; then
         mkdir -p "${dest_headers}/runtime/proto"
         find "${bazel_bin}/runtime/proto" -name '*.h' -exec cp {} "${dest_headers}/runtime/proto/" \; 2>/dev/null || true
     fi
 
-    # Copy abseil headers from the external workspace
+    # Copy dependency headers from the external workspace
     local bazel_external
     bazel_external="$(bazel info output_base 2>/dev/null)/external"
 
     # Abseil
     if [ -d "${bazel_external}/com_google_absl" ]; then
         log "Copying abseil headers..."
-        mkdir -p "${dest_headers}/absl"
         (cd "${bazel_external}/com_google_absl" && find absl -name '*.h' -o -name '*.inc' | while read -r f; do
             mkdir -p "${dest_headers}/$(dirname "$f")"
             cp "$f" "${dest_headers}/$f"
@@ -191,7 +232,12 @@ collect_headers() {
     # nlohmann/json
     if [ -d "${bazel_external}/nlohmann_json" ]; then
         log "Copying nlohmann/json headers..."
-        (cd "${bazel_external}/nlohmann_json" && find . -name '*.hpp' -o -name '*.h' | while read -r f; do
+        (cd "${bazel_external}/nlohmann_json" && find include -name '*.hpp' -o -name '*.h' 2>/dev/null | while read -r f; do
+            mkdir -p "${dest_headers}/$(dirname "$f")"
+            cp "$f" "${dest_headers}/$f"
+        done)
+        # Also copy top-level headers
+        (cd "${bazel_external}/nlohmann_json" && find . -maxdepth 2 -name '*.hpp' -o -name '*.h' 2>/dev/null | while read -r f; do
             mkdir -p "${dest_headers}/$(dirname "$f")"
             cp "$f" "${dest_headers}/$f"
         done)
@@ -200,22 +246,14 @@ collect_headers() {
     # LiteRT headers
     if [ -d "${bazel_external}/litert" ]; then
         log "Copying LiteRT headers..."
-        mkdir -p "${dest_headers}/litert"
-        (cd "${bazel_external}/litert" && find litert -name '*.h' | head -500 | while read -r f; do
+        (cd "${bazel_external}/litert" && find litert tflite -name '*.h' 2>/dev/null | head -700 | while read -r f; do
             mkdir -p "${dest_headers}/$(dirname "$f")"
             cp "$f" "${dest_headers}/$f"
         done)
-        # Also copy tflite headers if present
-        if [ -d "${bazel_external}/litert/tflite" ]; then
-            (cd "${bazel_external}/litert" && find tflite -name '*.h' | head -200 | while read -r f; do
-                mkdir -p "${dest_headers}/$(dirname "$f")"
-                cp "$f" "${dest_headers}/$f"
-            done)
-        fi
     fi
 
     local header_count
-    header_count=$(find "${dest_headers}" -name '*.h' -o -name '*.hpp' -o -name '*.inc' | wc -l)
+    header_count=$(find "${dest_headers}" \( -name '*.h' -o -name '*.hpp' -o -name '*.inc' \) | wc -l | tr -d ' ')
     log "Collected ${header_count} header files for ${config_label}."
 }
 
@@ -246,6 +284,7 @@ main() {
     mkdir -p "${WORK_DIR}" "${OUTPUT_DIR}"
 
     clone_litert_lm
+    inject_build_target
 
     # Build ios_arm64 (device)
     build_for_config "ios_arm64" "${CACHE_ARM64}"
