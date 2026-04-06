@@ -292,7 +292,7 @@ static litert::lm::OptionalArgs OptionalArgsWithConstraint(
     litert::lm::Message msg = litert::lm::JsonMessage(msgJson);
 
     auto optArgs = OptionalArgsWithConstraint(constraint);
-    auto result = _conversation->SendMessage(msg, optArgs);
+    auto result = _conversation->SendMessage(msg, std::move(optArgs));
     if (!result.ok()) {
         if (error) *error = NSErrorFromAbslStatus(result.status());
         return nil;
@@ -358,7 +358,7 @@ static litert::lm::OptionalArgs OptionalArgsWithConstraint(
                 });
             }
         },
-        optArgs);
+        std::move(optArgs));
 
     if (!status.ok()) {
         if (error) *error = NSErrorFromAbslStatus(status);
