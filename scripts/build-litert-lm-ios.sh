@@ -262,9 +262,13 @@ collect_headers() {
         # Also show what CXX-related files exist at all
         if [ "${found_rs}" -eq 0 ]; then
             log "    DEBUG: All files matching *minijinja* in output_base:"
-            find "${output_base}" -name '*minijinja*' -not -path '*/external/*' 2>/dev/null | head -10 || true
+            find "${output_base}" -name '*minijinja*' -not -path '*/external/*' 2>/dev/null | head -20 || true
             log "    DEBUG: All .rs.h files anywhere:"
             find "${output_base}" -name '*.rs.h' 2>/dev/null | head -10 || true
+            log "    DEBUG: Contents of minijinja_template_cpp _objs dirs:"
+            find "${output_base}" -path '*minijinja_template_cpp*' -type f 2>/dev/null | head -20 || true
+            log "    DEBUG: All header files near minijinja:"
+            find "${output_base}" -path '*minijinja*' \( -name '*.h' -o -name '*.hpp' -o -name '*.hh' \) 2>/dev/null | head -10 || true
         fi
     fi
     if [ "${found_rs}" -eq 0 ]; then
