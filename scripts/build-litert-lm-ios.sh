@@ -232,15 +232,44 @@ collect_headers() {
             fi
         done
         # Also copy generated headers from LiteRT's bazel-bin output
-        local litert_genbin="${execroot}/bazel-out/${config_label}-opt/bin/external/litert"
-        if [ -d "${litert_genbin}" ]; then
-            log "Copying LiteRT generated headers..."
-            (cd "${litert_genbin}" && find . -name '*.h' 2>/dev/null | while read -r f; do
-                local rel="${f#./}"
-                mkdir -p "${dest_headers}/$(dirname "$rel")"
-                cp "$f" "${dest_headers}/$rel"
-            done) || true
-        fi
+        # These may be at: bazel-out/<config>-opt/bin/external/litert/
+        local output_base_local
+        output_base_local="$(bazel info output_base 2>/dev/null)"
+        local execroot_local="${output_base_local}/execroot/litert_lm"
+        for litert_genbin in \
+            "${execroot_local}/bazel-out/${config_label}-opt/bin/external/litert" \
+            "${bazel_bin}/external/litert" \
+            "${execroot_local}/bazel-out/ios_arm64-opt/bin/external/litert" \
+            "${execroot_local}/bazel-out/ios_sim_arm64-opt/bin/external/litert"; do
+            if [ -d "${litert_genbin}" ]; then
+                log "Copying LiteRT generated headers from ${litert_genbin}..."
+                (cd "${litert_genbin}" && find . -name '*.h' 2>/dev/null | while read -r f; do
+                    local rel="${f#./}"
+                    mkdir -p "${dest_headers}/$(dirname "$rel")"
+                    cp "$f" "${dest_headers}/$rel"
+                done) || true
+                break  # found one, done
+            fi
+        done
+    fi
+
+    # Broad fallback: find build_config.h anywhere in bazel output for litert
+    local found_build_config=0
+    if [ ! -f "${dest_headers}/litert/build_common/build_config.h" ]; then
+        log "build_config.h not found yet, searching broadly..."
+        while IFS= read -r -d '' f; do
+            if [ "${found_build_config}" -eq 0 ]; then
+                log "  Found build_config.h at: $f"
+                # Extract the path relative to the directory containing 'litert/'
+                local rel_from_litert
+                rel_from_litert=$(echo "$f" | grep -oE 'litert/build_common/build_config\.h$' || true)
+                if [ -n "${rel_from_litert}" ]; then
+                    mkdir -p "${dest_headers}/litert/build_common"
+                    cp "$f" "${dest_headers}/${rel_from_litert}"
+                    found_build_config=1
+                fi
+            fi
+        done < <(find "${output_base}" -path "*/litert/build_common/build_config.h" -print0 2>/dev/null) || true
     fi
 
     # Google protobuf headers
