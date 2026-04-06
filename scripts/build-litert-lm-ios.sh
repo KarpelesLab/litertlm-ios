@@ -143,54 +143,64 @@ collect_headers() {
 
     log "Collecting headers for ${config_label}..."
 
-    # Public API headers from LiteRT-LM runtime
-    local -a api_headers=(
-        "runtime/engine/engine.h"
-        "runtime/engine/engine_factory.h"
-        "runtime/engine/engine_settings.h"
-        "runtime/engine/io_types.h"
-        "runtime/engine/litert_lm_lib.h"
-        "runtime/conversation/conversation.h"
-        "runtime/conversation/io_types.h"
-        "runtime/components/tokenizer.h"
-        "runtime/components/prompt_template.h"
-        "runtime/components/constrained_decoding/constraint.h"
-        "runtime/components/constrained_decoding/constraint_provider.h"
-        "runtime/components/constrained_decoding/constraint_provider_config.h"
-        "runtime/conversation/model_data_processor/config_registry.h"
-        "runtime/conversation/model_data_processor/model_data_processor.h"
-        "runtime/executor/executor_settings_base.h"
-        "runtime/executor/llm_executor_settings.h"
-        "runtime/executor/audio_executor_settings.h"
-        "runtime/executor/vision_executor_settings.h"
-        "runtime/util/status_macros.h"
-        "runtime/util/litert_status_util.h"
-        "runtime/util/scoped_file.h"
-    )
-
-    for hdr in "${api_headers[@]}"; do
-        if [ -f "${hdr}" ]; then
-            local dir
-            dir="$(dirname "${hdr}")"
-            mkdir -p "${dest_headers}/${dir}"
-            cp "${hdr}" "${dest_headers}/${dir}/"
-        fi
-    done
-
-    # Copy proto-generated headers from bazel-bin
     local bazel_bin
     bazel_bin="$(bazel info bazel-bin --config="${config_label}" 2>/dev/null || true)"
     if [ -z "${bazel_bin}" ]; then
         bazel_bin="$(bazel info bazel-bin 2>/dev/null || echo "bazel-bin")"
     fi
-    if [ -d "${bazel_bin}/runtime/proto" ]; then
-        mkdir -p "${dest_headers}/runtime/proto"
-        find "${bazel_bin}/runtime/proto" -name '*.h' -exec cp {} "${dest_headers}/runtime/proto/" \; 2>/dev/null || true
-    fi
-
-    # Copy dependency headers from the external workspace
     local bazel_external
     bazel_external="$(bazel info output_base 2>/dev/null)/external"
+
+    # -----------------------------------------------------------------------
+    # A) ALL runtime/ source headers (not just a hardcoded list)
+    # -----------------------------------------------------------------------
+    log "Copying all runtime/ source headers..."
+    (find runtime -name '*.h' 2>/dev/null | while read -r f; do
+        mkdir -p "${dest_headers}/$(dirname "$f")"
+        cp "$f" "${dest_headers}/$f"
+    done) || true
+
+    # -----------------------------------------------------------------------
+    # B) Generated headers from bazel-bin (proto .pb.h, build_config.h, etc.)
+    # -----------------------------------------------------------------------
+    log "Copying generated headers from bazel-bin..."
+    # Proto-generated headers
+    if [ -d "${bazel_bin}/runtime" ]; then
+        (cd "${bazel_bin}" && find runtime -name '*.h' 2>/dev/null | while read -r f; do
+            mkdir -p "${dest_headers}/$(dirname "$f")"
+            cp "$f" "${dest_headers}/$f"
+        done) || true
+    fi
+    # build_config.h and other generated headers at the top level of bazel-bin
+    for gen_hdr in build_config.h config.h; do
+        if [ -f "${bazel_bin}/${gen_hdr}" ]; then
+            cp "${bazel_bin}/${gen_hdr}" "${dest_headers}/${gen_hdr}"
+        fi
+    done
+    # Search more broadly for build_config.h (may be nested)
+    while IFS= read -r -d '' f; do
+        local rel="${f#"${bazel_bin}/"}"
+        mkdir -p "${dest_headers}/$(dirname "$rel")"
+        cp "$f" "${dest_headers}/$rel"
+    done < <(find "${bazel_bin}" -name 'build_config.h' -not -path '*/external/*' -print0 2>/dev/null) || true
+
+    # Also check bazel-genfiles and the output base for generated headers
+    local output_base
+    output_base="$(bazel info output_base 2>/dev/null)"
+    local execroot="${output_base}/execroot/litert_lm"
+    for search_dir in "${execroot}/bazel-out/${config_label}-opt/bin" "${execroot}/bazel-genfiles"; do
+        if [ -d "${search_dir}" ]; then
+            while IFS= read -r -d '' f; do
+                local rel="${f#"${search_dir}/"}"
+                mkdir -p "${dest_headers}/$(dirname "$rel")"
+                cp "$f" "${dest_headers}/$rel"
+            done < <(find "${search_dir}" -name 'build_config.h' -print0 2>/dev/null) || true
+        fi
+    done
+
+    # -----------------------------------------------------------------------
+    # C) External dependency headers
+    # -----------------------------------------------------------------------
 
     # Abseil
     if [ -d "${bazel_external}/com_google_absl/absl" ]; then
@@ -210,17 +220,45 @@ collect_headers() {
         done) || true
     fi
 
-    # LiteRT headers
+    # LiteRT headers (all of them, no limit)
     if [ -d "${bazel_external}/litert" ]; then
         log "Copying LiteRT headers..."
         for subdir in litert tflite; do
             if [ -d "${bazel_external}/litert/${subdir}" ]; then
-                (cd "${bazel_external}/litert" && find "${subdir}" -name '*.h' 2>/dev/null | head -500 | while read -r f; do
+                (cd "${bazel_external}/litert" && find "${subdir}" -name '*.h' 2>/dev/null | while read -r f; do
                     mkdir -p "${dest_headers}/$(dirname "$f")"
                     cp "$f" "${dest_headers}/$f"
                 done) || true
             fi
         done
+        # Also copy generated headers from LiteRT's bazel-bin output
+        local litert_genbin="${execroot}/bazel-out/${config_label}-opt/bin/external/litert"
+        if [ -d "${litert_genbin}" ]; then
+            log "Copying LiteRT generated headers..."
+            (cd "${litert_genbin}" && find . -name '*.h' 2>/dev/null | while read -r f; do
+                local rel="${f#./}"
+                mkdir -p "${dest_headers}/$(dirname "$rel")"
+                cp "$f" "${dest_headers}/$rel"
+            done) || true
+        fi
+    fi
+
+    # Google protobuf headers
+    if [ -d "${bazel_external}/com_google_protobuf/src/google" ]; then
+        log "Copying protobuf headers..."
+        (cd "${bazel_external}/com_google_protobuf/src" && find google \( -name '*.h' -o -name '*.inc' \) 2>/dev/null | while read -r f; do
+            mkdir -p "${dest_headers}/$(dirname "$f")"
+            cp "$f" "${dest_headers}/$f"
+        done) || true
+    fi
+
+    # re2
+    if [ -d "${bazel_external}/com_googlesource_code_re2/re2" ]; then
+        log "Copying re2 headers..."
+        (cd "${bazel_external}/com_googlesource_code_re2" && find re2 -name '*.h' 2>/dev/null | while read -r f; do
+            mkdir -p "${dest_headers}/$(dirname "$f")"
+            cp "$f" "${dest_headers}/$f"
+        done) || true
     fi
 
     local header_count
