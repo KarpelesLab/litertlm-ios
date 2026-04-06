@@ -253,24 +253,37 @@ collect_headers() {
         done
     fi
 
-    # Broad fallback: find build_config.h anywhere in bazel output for litert
-    local found_build_config=0
+    # Broad fallback: find build_config.h anywhere in bazel output for litert.
+    # Bazel _virtual_includes are symlink farms — use cp -L to dereference.
     if [ ! -f "${dest_headers}/litert/build_common/build_config.h" ]; then
         log "build_config.h not found yet, searching broadly..."
-        while IFS= read -r -d '' f; do
-            if [ "${found_build_config}" -eq 0 ]; then
-                log "  Found build_config.h at: $f"
-                # Extract the path relative to the directory containing 'litert/'
-                local rel_from_litert
-                rel_from_litert=$(echo "$f" | grep -oE 'litert/build_common/build_config\.h$' || true)
-                if [ -n "${rel_from_litert}" ]; then
-                    mkdir -p "${dest_headers}/litert/build_common"
-                    cp "$f" "${dest_headers}/${rel_from_litert}"
-                    found_build_config=1
-                fi
-            fi
-        done < <(find "${output_base}" -path "*/litert/build_common/build_config.h" -print0 2>/dev/null) || true
+        local found_bc=""
+        found_bc=$(find "${output_base}" -name 'build_config.h' \
+            -path '*/litert/build_common/*' \
+            -not -type d 2>/dev/null | head -1) || true
+        if [ -n "${found_bc}" ]; then
+            log "  Found build_config.h at: ${found_bc}"
+            mkdir -p "${dest_headers}/litert/build_common"
+            # Use cat to bypass symlink issues
+            cat "${found_bc}" > "${dest_headers}/litert/build_common/build_config.h" 2>/dev/null || \
+                cp -L "${found_bc}" "${dest_headers}/litert/build_common/build_config.h" 2>/dev/null || \
+                log "  WARNING: could not copy build_config.h"
+        else
+            log "  WARNING: build_config.h not found anywhere in output_base"
+        fi
     fi
+
+    # Also grab any other _virtual_includes headers from litert that we need
+    log "Copying LiteRT virtual include headers..."
+    while IFS= read -r f; do
+        # Extract path from the last 'litert/' segment onward
+        local rel
+        rel=$(echo "$f" | sed -n 's|.*_virtual_includes/[^/]*/\(.*\)|\1|p')
+        if [ -n "${rel}" ] && [ ! -f "${dest_headers}/${rel}" ]; then
+            mkdir -p "${dest_headers}/$(dirname "$rel")"
+            cat "$f" > "${dest_headers}/${rel}" 2>/dev/null || true
+        fi
+    done < <(find "${output_base}" -path '*/external/litert/*/_virtual_includes/*' -name '*.h' 2>/dev/null | head -200) || true
 
     # Google protobuf headers
     if [ -d "${bazel_external}/com_google_protobuf/src/google" ]; then
