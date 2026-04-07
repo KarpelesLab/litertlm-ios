@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   build-ios:
-    name: "Build iOS xcframework"
+    name: "Build iOS xcframeworks"
     runs-on: macos-15
     timeout-minutes: 180
     env:
@@ -47,144 +47,96 @@ jobs:
           chmod +x scripts/build-litert-lm-ios.sh
           scripts/build-litert-lm-ios.sh
 
-      - name: Verify xcframework structure
+      - name: Verify xcframeworks
         run: |
-          echo "=== xcframework structure ==="
-          find build/output/LiteRTLM.xcframework -maxdepth 3 -type f | head -30
+          echo "=== LiteRTLM.xcframework ==="
+          find build/output/LiteRTLM.xcframework -maxdepth 3 | head -20
           echo ""
-          echo "=== Library architectures ==="
-          for lib in build/output/*/liblitert_lm.a; do
-            echo "--- $lib ---"
-            lipo -info "$lib" 2>/dev/null || file "$lib"
-          done
+          echo "=== Public headers ==="
+          find build/output/LiteRTLM.xcframework -name '*.h' | sort
+          echo ""
+          echo "=== GemmaConstraintProvider.xcframework ==="
+          find build/output/GemmaConstraintProvider.xcframework -maxdepth 3 2>/dev/null | head -10 || echo "(not found)"
 
-      - name: Test compile wrapper against artifact
+      - name: Test link against framework
         run: |
-          HEADERS="build/output/ios_sim_arm64/headers"
-          WRAPPER="Sources/LiteRTLM"
-          CLANG_FLAGS=(
-            -std=c++20
-            -fobjc-arc
-            -target arm64-apple-ios13.0-simulator
-            -isysroot "$(xcrun --sdk iphonesimulator --show-sdk-path)"
-            -I "${HEADERS}"
-            -I "${HEADERS}/nlohmann_json"
-            -I "${HEADERS}/nlohmann_json/include"
-            -I "${WRAPPER}"
-            -Wno-deprecated-declarations
-          )
-
-          echo "=== Compiling each wrapper .mm file ==="
-          FAIL=0
-          for mm_file in "${WRAPPER}"/*.mm; do
-            echo "--- Compiling $(basename "$mm_file") ---"
-            if xcrun --sdk iphonesimulator clang++ "${CLANG_FLAGS[@]}" -c "$mm_file" 2>&1; then
-              echo "  OK"
-            else
-              echo "  FAILED"
-              FAIL=1
-            fi
-          done
-
-          if [ "$FAIL" -ne 0 ]; then
-            echo "=== Compile test FAILED ==="
-            exit 1
-          fi
-          echo "=== All wrapper files compile OK ==="
-
-      - name: Test link wrapper into binary
-        run: |
-          HEADERS="build/output/ios_sim_arm64/headers"
-          WRAPPER="Sources/LiteRTLM"
-          LIB="build/output/ios_sim_arm64/liblitert_lm.a"
-          DYLIB_DIR="build/output/ios_sim_arm64/dylibs"
+          # Test that we can compile and link against the xcframework
           SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 
-          CLANG_FLAGS=(
-            -std=c++20
-            -fobjc-arc
-            -target arm64-apple-ios13.0-simulator
-            -isysroot "${SDK}"
-            -I "${HEADERS}"
-            -I "${HEADERS}/nlohmann_json"
-            -I "${HEADERS}/nlohmann_json/include"
-            -I "${WRAPPER}"
-            -Wno-deprecated-declarations
-          )
+          # Find the simulator slice in the xcframework
+          LIB_DIR=$(find build/output/LiteRTLM.xcframework -name '*.a' -path '*simulator*' -exec dirname {} \; | head -1)
+          HDR_DIR="${LIB_DIR}/Headers"
+          LIB_FILE=$(find "${LIB_DIR}" -name '*.a' | head -1)
 
-          # Compile all .mm files to .o
-          OBJ_FILES=()
-          for mm_file in "${WRAPPER}"/*.mm; do
-            obj="/tmp/$(basename "${mm_file}" .mm).o"
-            echo "--- Compiling $(basename "$mm_file") ---"
-            xcrun --sdk iphonesimulator clang++ "${CLANG_FLAGS[@]}" -c "$mm_file" -o "$obj"
-            OBJ_FILES+=("$obj")
-          done
+          echo "Library: ${LIB_FILE}"
+          echo "Headers: ${HDR_DIR}"
+          ls "${HDR_DIR}/"
 
-          # Write a minimal main that references our wrapper symbols
-          cat > /tmp/link_test.mm << 'LINKEOF'
-          #import "LRTEngine.h"
-          #import "LRTSession.h"
-          #import "LRTConversation.h"
+          cat > /tmp/framework_test.m << 'TESTEOF'
+          #import <LiteRTLM/LiteRTLM.h>
           int main() {
-              // Force the linker to pull in our wrapper symbols
-              [LRTEngineConfig configWithModelPath:@"test.litertlm"];
-              [LRTSessionConfig defaultConfig];
-              [LRTConversationConfig defaultConfig];
-              [LRTDecodeConfig defaultConfig];
-              [LRTConstraint jsonSchemaConstraint:@"{}"];
-              [LRTInputText inputWithText:@"hi"];
-              [LRTInputImage inputWithData:[NSData data]];
+              @autoreleasepool {
+                  LRTEngineConfig *config = [LRTEngineConfig configWithModelPath:@"test.litertlm"];
+                  LRTSessionConfig *sc = [LRTSessionConfig defaultConfig];
+                  sc.enableVision = YES;
+                  LRTConversationConfig *cc = [LRTConversationConfig defaultConfig];
+                  cc.enableConstrainedDecoding = YES;
+                  LRTConstraint *c = [LRTConstraint jsonSchemaConstraint:@"{}"];
+                  LRTDecodeConfig *dc = [LRTDecodeConfig defaultConfig];
+                  LRTInputText *t = [LRTInputText inputWithText:@"hi"];
+                  LRTInputImage *img = [LRTInputImage inputWithData:[NSData data]];
+                  LRTChannel *ch = [LRTChannel channelWithName:@"t" startDelimiter:@"<t>" endDelimiter:@"</t>"];
+                  (void)config; (void)sc; (void)cc; (void)c; (void)dc; (void)t; (void)img; (void)ch;
+              }
               return 0;
           }
-          LINKEOF
-          xcrun --sdk iphonesimulator clang++ "${CLANG_FLAGS[@]}" -c /tmp/link_test.mm -o /tmp/link_test.o
+          TESTEOF
 
-          # Link everything together with -force_load to surface all undefined symbols
-          echo "=== Linking ==="
+          # Compile
+          xcrun --sdk iphonesimulator clang \
+            -fobjc-arc \
+            -target arm64-apple-ios13.0-simulator \
+            -isysroot "${SDK}" \
+            -I "${HDR_DIR}" \
+            -c /tmp/framework_test.m -o /tmp/framework_test.o
+
+          # Link with -force_load
           LINK_FLAGS=(
             -target arm64-apple-ios13.0-simulator
             -isysroot "${SDK}"
-            -force_load "${LIB}"
-            -framework Foundation
-            -framework Metal
-            -framework AVFoundation
-            -framework AudioToolbox
-            -lc++
-            -lobjc
+            -force_load "${LIB_FILE}"
+            -framework Foundation -framework Metal
+            -framework AVFoundation -framework AudioToolbox
+            -lc++ -lobjc
           )
-          # Add dylibs if present
-          if [ -d "${DYLIB_DIR}" ]; then
-            LINK_FLAGS+=(-L "${DYLIB_DIR}")
-            for dylib in "${DYLIB_DIR}"/*.dylib; do
-              LINK_FLAGS+=(-l"$(basename "$dylib" .dylib | sed 's/^lib//')")
-            done
+          # Add Gemma dylib if present
+          GEMMA_DIR=$(find build/output/GemmaConstraintProvider.xcframework -name '*.dylib' -path '*simulator*' -exec dirname {} \; 2>/dev/null | head -1)
+          if [ -n "${GEMMA_DIR}" ]; then
+            DYLIB=$(find "${GEMMA_DIR}" -name '*.dylib' | head -1)
+            LINK_FLAGS+=("${DYLIB}")
           fi
 
           xcrun --sdk iphonesimulator clang++ \
             "${LINK_FLAGS[@]}" \
-            /tmp/link_test.o "${OBJ_FILES[@]}" \
-            -o /tmp/link_test_bin 2>&1
+            /tmp/framework_test.o \
+            -o /tmp/framework_test_bin
 
           echo "=== Link test PASSED ==="
 
-      - name: Upload xcframework artifact
+      - name: Upload LiteRTLM.xcframework
         uses: actions/upload-artifact@v4
         with:
-          name: LiteRTLM-xcframework-${{ env.LITERT_LM_VERSION }}
+          name: LiteRTLM-${{ env.LITERT_LM_VERSION }}
           path: build/output/LiteRTLM.xcframework
-          retention-days: 30
+          retention-days: 90
 
-      - name: Upload raw libraries artifact
+      - name: Upload GemmaConstraintProvider.xcframework
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: LiteRTLM-libs-${{ env.LITERT_LM_VERSION }}
-          path: |
-            build/output/ios_arm64/liblitert_lm.a
-            build/output/ios_arm64/dylibs/
-            build/output/ios_sim_arm64/liblitert_lm.a
-            build/output/ios_sim_arm64/dylibs/
-          retention-days: 30
+          name: GemmaConstraintProvider-${{ env.LITERT_LM_VERSION }}
+          path: build/output/GemmaConstraintProvider.xcframework
+          retention-days: 90
 
       - name: Save Bazel cache
         uses: actions/cache/save@v4
