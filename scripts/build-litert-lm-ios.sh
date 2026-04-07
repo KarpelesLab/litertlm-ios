@@ -149,6 +149,35 @@ collect_libs() {
     log "Found library: ${found_lib} (${best_size} bytes)"
     cp "${found_lib}" "${dest_dir}/liblitert_lm.a"
 
+    # Find and merge Rust static libraries that apple_static_library missed.
+    # The Rust .a files (e.g. libminijinja_template-*.a) contain the actual
+    # Rust implementation symbols that the C++ CXX bridge references.
+    log "Searching for Rust static libraries to merge..."
+    local -a rust_libs=()
+    while IFS= read -r f; do
+        local fsize
+        fsize=$(stat -f%z "$f" 2>/dev/null || stat --format=%s "$f" 2>/dev/null || echo "0")
+        if [ "${fsize}" -gt 1000 ]; then
+            log "  Found Rust lib: $f (${fsize} bytes)"
+            rust_libs+=("$f")
+        fi
+    done < <(find "${output_base}/execroot" -name 'libminijinja_template*.a' \
+        -not -name '*params' \
+        -not -path '*-exec-*' \
+        -not -path '*darwin_arm64-opt/*' \
+        2>/dev/null | sort -u)
+
+    if [ ${#rust_libs[@]} -gt 0 ]; then
+        log "Merging ${#rust_libs[@]} Rust libraries into liblitert_lm.a..."
+        # libtool -static merges all archives into one
+        libtool -static -o "${dest_dir}/liblitert_lm_merged.a" \
+            "${dest_dir}/liblitert_lm.a" "${rust_libs[@]}" 2>/dev/null
+        mv "${dest_dir}/liblitert_lm_merged.a" "${dest_dir}/liblitert_lm.a"
+        log "  Merged library size: $(stat -f%z "${dest_dir}/liblitert_lm.a" 2>/dev/null) bytes"
+    else
+        log "  WARNING: No Rust static libraries found to merge"
+    fi
+
     # Verify architecture
     log "Architecture info:"
     lipo -info "${dest_dir}/liblitert_lm.a" 2>/dev/null || file "${dest_dir}/liblitert_lm.a"
