@@ -158,15 +158,28 @@ collect_libs() {
     # directory with a long hash suffix that we can't predict
     while IFS= read -r f; do
         local fsize
-        fsize=$(stat -f%z "$f" 2>/dev/null || stat --format=%s "$f" 2>/dev/null || echo "0")
+        fsize=$(stat -f%z "$f" 2>/dev/null || stat -L -f%z "$f" 2>/dev/null || echo "0")
         if [ "${fsize}" -gt 1000 ]; then
             log "  Found Rust lib: $f (${fsize} bytes)"
             rust_libs+=("$f")
         fi
-    done < <(find "${output_base}" -name 'libminijinja_template-*.a' \
+    done < <(find -L "${output_base}" -name 'libminijinja_template-*.a' \
         -not -path '*-exec-*' \
         -not -path '*darwin_arm64-opt/*' \
+        -type f \
         2>/dev/null | head -5)
+    # If still nothing, try the exact known path pattern
+    if [ ${#rust_libs[@]} -eq 0 ]; then
+        log "  Trying glob match in known platform-transitioned dirs..."
+        for f in "${output_base}"/execroot/litert_lm/bazel-out/*/bin/runtime/components/rust/libminijinja_template-*.a; do
+            if [ -f "$f" ]; then
+                local fsize
+                fsize=$(stat -f%z "$f" 2>/dev/null || echo "0")
+                log "  Found via glob: $f (${fsize} bytes)"
+                rust_libs+=("$f")
+            fi
+        done
+    fi
 
     if [ ${#rust_libs[@]} -gt 0 ]; then
         log "Merging ${#rust_libs[@]} Rust libraries into liblitert_lm.a..."
