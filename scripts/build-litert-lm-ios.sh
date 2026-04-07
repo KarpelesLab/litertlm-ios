@@ -2,12 +2,8 @@
 set -euo pipefail
 
 # Build LiteRT-LM for iOS (arm64 device + arm64 simulator)
-# Produces two xcframeworks:
-#   1. LiteRTLM.xcframework — static framework with Obj-C++ wrapper compiled in
-#   2. GemmaConstraintProvider.xcframework — optional dynamic framework for tool calling
-#
-# The consumer just adds LiteRTLM.xcframework and imports LRTEngine.h etc.
-# All C++ internals are hidden — only the LRT* Obj-C API is exposed.
+# Produces LiteRTLM.xcframework — a single static framework with the
+# Obj-C++ wrapper compiled in. Drop it into your Xcode project and go.
 
 LITERT_LM_VERSION="${LITERT_LM_VERSION:-v0.10.1}"
 LITERT_LM_REPO="https://github.com/google-ai-edge/LiteRT-LM.git"
@@ -28,12 +24,7 @@ clone_litert_lm() {
     if [ -d "${LITERT_LM_DIR}" ]; then
         rm -rf "${LITERT_LM_DIR}"
     fi
-    git lfs install --skip-smudge 2>/dev/null || true
     git clone --depth 1 --branch "${LITERT_LM_VERSION}" "${LITERT_LM_REPO}" "${LITERT_LM_DIR}"
-    # Fetch LFS objects for prebuilt binaries (dylibs)
-    log "Fetching LFS objects..."
-    cd "${LITERT_LM_DIR}"
-    git lfs pull --include="prebuilt/ios_arm64/*,prebuilt/ios_sim_arm64/*"
 }
 
 inject_build_target() {
@@ -72,7 +63,7 @@ build_for_config() {
         -- \
         -//python/... -//schema/py:* -//kotlin/...
 
-    # Build proto + Rust targets directly for predictable header/lib paths
+    # Build proto + Rust targets directly for predictable header paths
     log "Building generated header targets..."
     bazel build \
         --config="${config}" \
@@ -210,7 +201,6 @@ STUBEOF
                 done) || true
             fi
         done
-        # LiteRT generated headers
         (find "${execroot}/bazel-out" -path "*/bin/external/litert/*.h" \
             -not -path '*_virtual_includes*' -not -path '*-exec-*' \
             -type f 2>/dev/null | while read -r f; do
@@ -262,7 +252,6 @@ compile_wrapper() {
         -I "${int_headers}/nlohmann_json/include"
         -I "${wrapper_dir}"
         -Wno-deprecated-declarations
-        -fembed-bitcode
     )
 
     local -a obj_files=()
@@ -273,7 +262,6 @@ compile_wrapper() {
         obj_files+=("$obj")
     done
 
-    # Merge wrapper .o files into the static library
     log "  Merging wrapper objects into liblitert_lm.a..."
     libtool -static -o "${dest_dir}/liblitert_lm_merged.a" \
         "${dest_dir}/liblitert_lm.a" "${obj_files[@]}" 2>/dev/null
@@ -292,12 +280,10 @@ prepare_public_headers() {
     local wrapper_dir="${REPO_ROOT}/Sources/LiteRTLM"
     mkdir -p "${pub_headers}"
 
-    # Copy only the public Obj-C headers
     for h in "${wrapper_dir}"/LRT*.h; do
         cp "$h" "${pub_headers}/"
     done
 
-    # Create umbrella header
     cat > "${pub_headers}/LiteRTLM.h" << 'UMBRELLA'
 #ifndef LITERT_LM_IOS_UMBRELLA_H
 #define LITERT_LM_IOS_UMBRELLA_H
@@ -310,7 +296,6 @@ prepare_public_headers() {
 #endif /* LITERT_LM_IOS_UMBRELLA_H */
 UMBRELLA
 
-    # Create module map
     cat > "${pub_headers}/module.modulemap" << 'MODMAP'
 framework module LiteRTLM {
     umbrella header "LiteRTLM.h"
@@ -324,30 +309,10 @@ MODMAP
 }
 
 # ---------------------------------------------------------------------------
-# 7. Collect prebuilt dylibs
+# 7. Create xcframework
 # ---------------------------------------------------------------------------
-collect_dylibs() {
-    local config_label="$1"
-    local dest_dir="${OUTPUT_DIR}/${config_label}"
-    cd "${LITERT_LM_DIR}"
-
-    local prebuilt_dir=""
-    case "${config_label}" in
-        ios_arm64)     prebuilt_dir="prebuilt/ios_arm64" ;;
-        ios_sim_arm64) prebuilt_dir="prebuilt/ios_sim_arm64" ;;
-    esac
-    if [ -n "${prebuilt_dir}" ] && [ -d "${prebuilt_dir}" ]; then
-        mkdir -p "${dest_dir}/dylibs"
-        find "${prebuilt_dir}" -name '*.dylib' -exec cp {} "${dest_dir}/dylibs/" \; 2>/dev/null || true
-        log "Dylibs: $(ls "${dest_dir}/dylibs/" 2>/dev/null | tr '\n' ' ')"
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# 8. Create xcframeworks
-# ---------------------------------------------------------------------------
-create_xcframeworks() {
-    log "Creating LiteRTLM.xcframework (static)..."
+create_xcframework() {
+    log "Creating LiteRTLM.xcframework..."
     local xcfw="${OUTPUT_DIR}/LiteRTLM.xcframework"
     rm -rf "${xcfw}"
 
@@ -358,25 +323,6 @@ create_xcframeworks() {
         -headers "${OUTPUT_DIR}/ios_sim_arm64/public_headers" \
         -output "${xcfw}"
     log "Created ${xcfw}"
-
-    # GemmaConstraintProvider dynamic xcframework
-    # NOTE: Google's prebuilt ios_arm64 dylib is broken upstream — it's tagged
-    # as simulator (platform 2) instead of iOS device (platform 1), with
-    # minos 26.2. We can only ship the simulator slice until this is fixed.
-    # See: https://github.com/google-ai-edge/LiteRT-LM/tree/main/prebuilt/ios_arm64
-    local sim_dylib="${OUTPUT_DIR}/ios_sim_arm64/dylibs/libGemmaModelConstraintProvider.dylib"
-    if [ -f "${sim_dylib}" ]; then
-        log "Creating GemmaConstraintProvider.xcframework (simulator only)..."
-        local gemma_xcfw="${OUTPUT_DIR}/GemmaConstraintProvider.xcframework"
-        rm -rf "${gemma_xcfw}"
-        xcodebuild -create-xcframework \
-            -library "${sim_dylib}" \
-            -output "${gemma_xcfw}"
-        log "Created ${gemma_xcfw}"
-        log "WARNING: Device (ios_arm64) slice unavailable — upstream prebuilt is mislabeled as simulator"
-    else
-        log "WARNING: GemmaConstraintProvider dylib not found"
-    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -394,14 +340,11 @@ main() {
         collect_internal_headers "${arch}"
         compile_wrapper "${arch}"
         prepare_public_headers "${arch}"
-        collect_dylibs "${arch}"
     done
 
-    create_xcframeworks
+    create_xcframework
 
-    log "Done! Frameworks in ${OUTPUT_DIR}/"
-    log "  LiteRTLM.xcframework — main static framework"
-    log "  GemmaConstraintProvider.xcframework — optional dynamic framework"
+    log "Done! Output: ${OUTPUT_DIR}/LiteRTLM.xcframework"
 }
 
 main "$@"

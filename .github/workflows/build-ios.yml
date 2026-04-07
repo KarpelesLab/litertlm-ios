@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   build-ios:
-    name: "Build iOS xcframeworks"
+    name: "Build iOS xcframework"
     runs-on: macos-15
     timeout-minutes: 180
     env:
@@ -47,31 +47,16 @@ jobs:
           chmod +x scripts/build-litert-lm-ios.sh
           scripts/build-litert-lm-ios.sh
 
-      - name: Verify xcframeworks
+      - name: Verify xcframework
         run: |
           echo "=== LiteRTLM.xcframework ==="
           find build/output/LiteRTLM.xcframework -maxdepth 3 | head -20
           echo ""
           echo "=== Public headers ==="
           find build/output/LiteRTLM.xcframework -name '*.h' | sort
-          echo ""
-          echo "=== GemmaConstraintProvider.xcframework ==="
-          find build/output/GemmaConstraintProvider.xcframework -maxdepth 3 2>/dev/null | head -10 || echo "(not found)"
 
-      - name: Test link against framework
+      - name: Test link (simulator + device)
         run: |
-          # Test that we can compile and link against the xcframework
-          SDK="$(xcrun --sdk iphonesimulator --show-sdk-path)"
-
-          # Find the simulator slice in the xcframework
-          LIB_DIR=$(find build/output/LiteRTLM.xcframework -name '*.a' -path '*simulator*' -exec dirname {} \; | head -1)
-          HDR_DIR="${LIB_DIR}/Headers"
-          LIB_FILE=$(find "${LIB_DIR}" -name '*.a' | head -1)
-
-          echo "Library: ${LIB_FILE}"
-          echo "Headers: ${HDR_DIR}"
-          ls "${HDR_DIR}/"
-
           cat > /tmp/framework_test.m << 'TESTEOF'
           #import "LiteRTLM.h"
           int main() {
@@ -92,50 +77,49 @@ jobs:
           }
           TESTEOF
 
-          # Compile
-          xcrun --sdk iphonesimulator clang \
-            -fobjc-arc \
-            -target arm64-apple-ios13.0-simulator \
-            -isysroot "${SDK}" \
-            -I "${HDR_DIR}" \
-            -c /tmp/framework_test.m -o /tmp/framework_test.o
+          # Test both architectures: simulator AND device
+          for SLICE in ios-arm64-simulator ios-arm64; do
+            echo "=== Testing ${SLICE} ==="
+            SLICE_DIR="build/output/LiteRTLM.xcframework/${SLICE}"
+            if [ ! -d "${SLICE_DIR}" ]; then
+              echo "ERROR: ${SLICE_DIR} not found"
+              exit 1
+            fi
 
-          # Link with -force_load
-          LINK_FLAGS=(
-            -target arm64-apple-ios13.0-simulator
-            -isysroot "${SDK}"
-            -force_load "${LIB_FILE}"
-            -framework Foundation -framework Metal
-            -framework AVFoundation -framework AudioToolbox
-            -lc++ -lobjc
-          )
-          # Add Gemma dylib if present
-          GEMMA_DIR=$(find build/output/GemmaConstraintProvider.xcframework -name '*.dylib' -path '*simulator*' -exec dirname {} \; 2>/dev/null | head -1)
-          if [ -n "${GEMMA_DIR}" ]; then
-            DYLIB=$(find "${GEMMA_DIR}" -name '*.dylib' | head -1)
-            LINK_FLAGS+=("${DYLIB}")
-          fi
+            HDR_DIR="${SLICE_DIR}/Headers"
+            LIB_FILE=$(find "${SLICE_DIR}" -name '*.a' | head -1)
 
-          xcrun --sdk iphonesimulator clang++ \
-            "${LINK_FLAGS[@]}" \
-            /tmp/framework_test.o \
-            -o /tmp/framework_test_bin
+            case "${SLICE}" in
+              *simulator*) TARGET="arm64-apple-ios13.0-simulator"; SDK="iphonesimulator" ;;
+              *)           TARGET="arm64-apple-ios13.0";           SDK="iphoneos" ;;
+            esac
+            SDK_PATH="$(xcrun --sdk "${SDK}" --show-sdk-path)"
 
-          echo "=== Link test PASSED ==="
+            echo "  Compiling..."
+            xcrun --sdk "${SDK}" clang \
+              -fobjc-arc -target "${TARGET}" -isysroot "${SDK_PATH}" \
+              -I "${HDR_DIR}" \
+              -c /tmp/framework_test.m -o /tmp/framework_test_${SLICE}.o
+
+            echo "  Linking with -force_load..."
+            xcrun --sdk "${SDK}" clang++ \
+              -target "${TARGET}" -isysroot "${SDK_PATH}" \
+              -force_load "${LIB_FILE}" \
+              -framework Foundation -framework Metal \
+              -framework AVFoundation -framework AudioToolbox \
+              -lc++ -lobjc \
+              /tmp/framework_test_${SLICE}.o \
+              -o /tmp/framework_test_${SLICE}_bin
+
+            echo "  ${SLICE} OK"
+          done
+          echo "=== All link tests PASSED ==="
 
       - name: Upload LiteRTLM.xcframework
         uses: actions/upload-artifact@v4
         with:
           name: LiteRTLM-${{ env.LITERT_LM_VERSION }}
           path: build/output/LiteRTLM.xcframework
-          retention-days: 90
-
-      - name: Upload GemmaConstraintProvider.xcframework
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: GemmaConstraintProvider-${{ env.LITERT_LM_VERSION }}
-          path: build/output/GemmaConstraintProvider.xcframework
           retention-days: 90
 
       - name: Save Bazel cache
