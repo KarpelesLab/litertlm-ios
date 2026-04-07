@@ -44,6 +44,8 @@ apple_static_library(
     platform_type = "ios",
     deps = [
         "//runtime/engine:litert_lm_lib",
+        # Explicitly include the Rust CXX bridge for minijinja (prompt templates)
+        "//runtime/components/rust:minijinja_template_cpp",
     ],
 )
 BUILDEOF
@@ -149,6 +151,19 @@ collect_libs() {
     # Verify architecture
     log "Architecture info:"
     lipo -info "${dest_dir}/liblitert_lm.a" 2>/dev/null || file "${dest_dir}/liblitert_lm.a"
+
+    # Copy prebuilt dynamic libraries (e.g. GemmaModelConstraintProvider)
+    log "Collecting prebuilt dylibs for ${config_label}..."
+    local prebuilt_dir=""
+    case "${config_label}" in
+        ios_arm64)     prebuilt_dir="prebuilt/ios_arm64" ;;
+        ios_sim_arm64) prebuilt_dir="prebuilt/ios_sim_arm64" ;;
+    esac
+    if [ -n "${prebuilt_dir}" ] && [ -d "${prebuilt_dir}" ]; then
+        mkdir -p "${dest_dir}/dylibs"
+        find "${prebuilt_dir}" -name '*.dylib' -exec cp {} "${dest_dir}/dylibs/" \; 2>/dev/null || true
+        log "  Copied dylibs: $(ls "${dest_dir}/dylibs/" 2>/dev/null | tr '\n' ' ')"
+    fi
 }
 
 # ---------------------------------------------------------------------------
