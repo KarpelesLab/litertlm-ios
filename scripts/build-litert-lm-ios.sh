@@ -28,7 +28,12 @@ clone_litert_lm() {
     if [ -d "${LITERT_LM_DIR}" ]; then
         rm -rf "${LITERT_LM_DIR}"
     fi
+    git lfs install --skip-smudge 2>/dev/null || true
     git clone --depth 1 --branch "${LITERT_LM_VERSION}" "${LITERT_LM_REPO}" "${LITERT_LM_DIR}"
+    # Fetch LFS objects for prebuilt binaries (dylibs)
+    log "Fetching LFS objects..."
+    cd "${LITERT_LM_DIR}"
+    git lfs pull --include="prebuilt/ios_arm64/*,prebuilt/ios_sim_arm64/*"
 }
 
 inject_build_target() {
