@@ -161,7 +161,13 @@ collect_libs() {
     local -a rust_libs=()
     # The Rust target is built directly with --config=ios_*, producing
     # .rlib (Rust archive) or .a in the predictable bazel-bin location
-    for f in "${bazel_bin}"/runtime/components/rust/libminijinja_template*.{a,rlib}; do
+    # Search for all Rust libraries: minijinja, CXX runtime, and all transitive deps
+    # Use find to catch any .rlib or .a under the Rust-related dirs
+    for f in $(find "${bazel_bin}" \( -name '*.rlib' -o -name '*.a' \) \
+        -not -name '*params' \
+        -not -path '*_test*' \
+        \( -path '*/runtime/components/rust/*' -o -path '*/crate_index*' \) \
+        2>/dev/null); do
         if [ -f "$f" ]; then
             local fsize
             fsize=$(stat -f%z "$f" 2>/dev/null || echo "0")
