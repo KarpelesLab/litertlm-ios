@@ -154,6 +154,8 @@ collect_libs() {
     # Rust implementation symbols that the C++ CXX bridge references.
     log "Searching for Rust static libraries to merge..."
     local -a rust_libs=()
+    # Search the ENTIRE output_base — the Rust .a is in a platform-transitioned
+    # directory with a long hash suffix that we can't predict
     while IFS= read -r f; do
         local fsize
         fsize=$(stat -f%z "$f" 2>/dev/null || stat --format=%s "$f" 2>/dev/null || echo "0")
@@ -161,11 +163,10 @@ collect_libs() {
             log "  Found Rust lib: $f (${fsize} bytes)"
             rust_libs+=("$f")
         fi
-    done < <(find "${output_base}/execroot" -name 'libminijinja_template*.a' \
-        -not -name '*params' \
+    done < <(find "${output_base}" -name 'libminijinja_template-*.a' \
         -not -path '*-exec-*' \
         -not -path '*darwin_arm64-opt/*' \
-        2>/dev/null | sort -u)
+        2>/dev/null | head -5)
 
     if [ ${#rust_libs[@]} -gt 0 ]; then
         log "Merging ${#rust_libs[@]} Rust libraries into liblitert_lm.a..."

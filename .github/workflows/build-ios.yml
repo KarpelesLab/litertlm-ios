@@ -140,15 +140,16 @@ jobs:
           LINKEOF
           xcrun --sdk iphonesimulator clang++ "${CLANG_FLAGS[@]}" -c /tmp/link_test.mm -o /tmp/link_test.o
 
-          # Link everything together
+          # Link everything together with -force_load to surface all undefined symbols
           echo "=== Linking ==="
           LINK_FLAGS=(
             -target arm64-apple-ios13.0-simulator
             -isysroot "${SDK}"
-            # Force-load the entire static library so ALL undefined symbols
-            # surface, not just those reachable from our test main()
             -force_load "${LIB}"
             -framework Foundation
+            -framework Metal
+            -framework AVFoundation
+            -framework AudioToolbox
             -lc++
             -lobjc
           )
@@ -163,20 +164,9 @@ jobs:
           xcrun --sdk iphonesimulator clang++ \
             "${LINK_FLAGS[@]}" \
             /tmp/link_test.o "${OBJ_FILES[@]}" \
-            -o /tmp/link_test_bin 2>&1 || {
-              echo "=== Link test FAILED ==="
-              echo "Note: some undefined symbols from LiteRT-LM internals are expected"
-              echo "      if they come from runtime code not exercised by our wrapper."
-              echo "=== Checking if wrapper symbols link OK (ignoring litert internals) ==="
-              xcrun --sdk iphonesimulator clang++ \
-                "${LINK_FLAGS[@]}" \
-                /tmp/link_test.o "${OBJ_FILES[@]}" \
-                -o /tmp/link_test_bin 2>&1 | grep -c "LRT\|lrt" || echo "0 wrapper symbol errors"
-              # Don't fail the build for now - link errors from litert internals are expected
-              # since we're not running the full runtime, just testing our wrapper compiles
-              true
-          }
-          echo "=== Link test done ==="
+            -o /tmp/link_test_bin 2>&1
+
+          echo "=== Link test PASSED ==="
 
       - name: Upload xcframework artifact
         uses: actions/upload-artifact@v4
