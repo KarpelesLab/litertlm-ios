@@ -90,6 +90,7 @@ build_for_config() {
         //runtime/proto:token_cc_proto \
         //runtime/proto:litert_lm_metrics_cc_proto \
         //runtime/components:prompt_template \
+        //runtime/components/rust:minijinja_template \
         -- \
         -//python/... \
         -//schema/py:* \
@@ -154,31 +155,32 @@ collect_libs() {
     # Rust implementation symbols that the C++ CXX bridge references.
     log "Searching for Rust static libraries to merge..."
     local -a rust_libs=()
-    # Search the ENTIRE output_base — the Rust .a is in a platform-transitioned
-    # directory with a long hash suffix that we can't predict
-    while IFS= read -r f; do
-        local fsize
-        fsize=$(stat -f%z "$f" 2>/dev/null || stat -L -f%z "$f" 2>/dev/null || echo "0")
-        if [ "${fsize}" -gt 1000 ]; then
-            log "  Found Rust lib: $f (${fsize} bytes)"
-            rust_libs+=("$f")
-        fi
-    done < <(find -L "${output_base}" -name 'libminijinja_template-*.a' \
-        -not -path '*-exec-*' \
-        -not -path '*darwin_arm64-opt/*' \
-        -type f \
-        2>/dev/null | head -5)
-    # If still nothing, try the exact known path pattern
-    if [ ${#rust_libs[@]} -eq 0 ]; then
-        log "  Trying glob match in known platform-transitioned dirs..."
-        for f in "${output_base}"/execroot/litert_lm/bazel-out/*/bin/runtime/components/rust/libminijinja_template-*.a; do
-            if [ -f "$f" ]; then
-                local fsize
-                fsize=$(stat -f%z "$f" 2>/dev/null || echo "0")
-                log "  Found via glob: $f (${fsize} bytes)"
+    # The Rust target is built directly with --config=ios_*, so the .a
+    # should be in the predictable bazel-bin location
+    for f in "${bazel_bin}"/runtime/components/rust/libminijinja_template*.a; do
+        if [ -f "$f" ]; then
+            local fsize
+            fsize=$(stat -f%z "$f" 2>/dev/null || echo "0")
+            if [ "${fsize}" -gt 1000 ]; then
+                log "  Found Rust lib in bazel-bin: $f (${fsize} bytes)"
                 rust_libs+=("$f")
             fi
-        done
+        fi
+    done
+    # Fallback: search entire output_base (without following symlinks)
+    if [ ${#rust_libs[@]} -eq 0 ]; then
+        log "  Not in bazel-bin, searching output_base..."
+        while IFS= read -r f; do
+            if [ -s "$f" ]; then  # -s checks file exists AND is non-empty
+                local fsize
+                fsize=$(stat -f%z "$f" 2>/dev/null || echo "0")
+                log "  Found Rust lib: $f (${fsize} bytes)"
+                rust_libs+=("$f")
+            fi
+        done < <(find "${output_base}" -name 'libminijinja_template-*.a' \
+            -not -path '*-exec-*' \
+            -not -path '*darwin_arm64-opt/*' \
+            2>/dev/null | head -5)
     fi
 
     if [ ${#rust_libs[@]} -gt 0 ]; then
