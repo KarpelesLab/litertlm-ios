@@ -159,9 +159,9 @@ collect_libs() {
     # Rust implementation symbols that the C++ CXX bridge references.
     log "Searching for Rust static libraries to merge..."
     local -a rust_libs=()
-    # The Rust target is built directly with --config=ios_*, so the .a
-    # should be in the predictable bazel-bin location
-    for f in "${bazel_bin}"/runtime/components/rust/libminijinja_template*.a; do
+    # The Rust target is built directly with --config=ios_*, producing
+    # .rlib (Rust archive) or .a in the predictable bazel-bin location
+    for f in "${bazel_bin}"/runtime/components/rust/libminijinja_template*.{a,rlib}; do
         if [ -f "$f" ]; then
             local fsize
             fsize=$(stat -f%z "$f" 2>/dev/null || echo "0")
