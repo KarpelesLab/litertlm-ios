@@ -16,6 +16,7 @@
 // LiteRT accelerator definition (internal API)
 #include "litert/c/internal/litert_accelerator_def.h"
 #include "litert/c/litert_common.h"
+#include "litert/c/litert_environment_options.h"
 
 // TFLite Metal GPU delegate (open-source)
 #include "tflite/delegates/gpu/metal_delegate.h"
@@ -124,8 +125,8 @@ static LiteRtAcceleratorDef kMetalGpuAcceleratorDef = {
     .import_func = nullptr,
 
     // Device/queue tags — not used
-    .device_tag = 0,
-    .queue_tag = 0,
+    .device_tag = kLiteRtEnvOptionTagMetalDevice,
+    .queue_tag = kLiteRtEnvOptionTagMetalCommandQueue,
 
     // Supported buffer types
     .num_supported_buffer_types = 0,
