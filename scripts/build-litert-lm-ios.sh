@@ -154,55 +154,9 @@ collect_libs() {
     log "Found library: ${found_lib} (${best_size} bytes)"
     cp "${found_lib}" "${dest_dir}/liblitert_lm.a"
 
-    # Find and merge Rust static libraries that apple_static_library missed.
-    # The Rust .a files (e.g. libminijinja_template-*.a) contain the actual
-    # Rust implementation symbols that the C++ CXX bridge references.
-    log "Searching for Rust static libraries to merge..."
-    local -a rust_libs=()
-    # The Rust target is built directly with --config=ios_*, producing
-    # .rlib (Rust archive) or .a in the predictable bazel-bin location
-    # Search for all Rust libraries: minijinja, CXX runtime, and all transitive deps
-    # Use find to catch any .rlib or .a under the Rust-related dirs
-    for f in $(find "${bazel_bin}" \( -name '*.rlib' -o -name '*.a' \) \
-        -not -name '*params' \
-        -not -path '*_test*' \
-        \( -path '*/runtime/components/rust/*' -o -path '*/crate_index*' \) \
-        2>/dev/null); do
-        if [ -f "$f" ]; then
-            local fsize
-            fsize=$(stat -f%z "$f" 2>/dev/null || echo "0")
-            if [ "${fsize}" -gt 1000 ]; then
-                log "  Found Rust lib in bazel-bin: $f (${fsize} bytes)"
-                rust_libs+=("$f")
-            fi
-        fi
-    done
-    # Fallback: search entire output_base (without following symlinks)
-    if [ ${#rust_libs[@]} -eq 0 ]; then
-        log "  Not in bazel-bin, searching output_base..."
-        while IFS= read -r f; do
-            if [ -s "$f" ]; then  # -s checks file exists AND is non-empty
-                local fsize
-                fsize=$(stat -f%z "$f" 2>/dev/null || echo "0")
-                log "  Found Rust lib: $f (${fsize} bytes)"
-                rust_libs+=("$f")
-            fi
-        done < <(find "${output_base}" -name 'libminijinja_template-*.a' \
-            -not -path '*-exec-*' \
-            -not -path '*darwin_arm64-opt/*' \
-            2>/dev/null | head -5)
-    fi
-
-    if [ ${#rust_libs[@]} -gt 0 ]; then
-        log "Merging ${#rust_libs[@]} Rust libraries into liblitert_lm.a..."
-        # libtool -static merges all archives into one
-        libtool -static -o "${dest_dir}/liblitert_lm_merged.a" \
-            "${dest_dir}/liblitert_lm.a" "${rust_libs[@]}" 2>/dev/null
-        mv "${dest_dir}/liblitert_lm_merged.a" "${dest_dir}/liblitert_lm.a"
-        log "  Merged library size: $(stat -f%z "${dest_dir}/liblitert_lm.a" 2>/dev/null) bytes"
-    else
-        log "  WARNING: No Rust static libraries found to merge"
-    fi
+    # Note: Rust symbols (minijinja etc.) are included in the apple_static_library
+    # output. The rust::Box<T> inline stub in the generated CXX bridge header
+    # satisfies wrapper compilation without needing to merge separate Rust .a files.
 
     # Verify architecture
     log "Architecture info:"
