@@ -68,6 +68,7 @@ build_for_config() {
         --config="${config}" \
         --disk_cache="${CACHE_DIR}" \
         --build_tag_filters=-requires-mac-inputs:hard,-no_mac \
+        --check_visibility=false \
         //ios_package:LiteRTLM \
         -- \
         -//python/... \
