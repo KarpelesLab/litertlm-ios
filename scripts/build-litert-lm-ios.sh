@@ -357,19 +357,29 @@ collect_headers() {
 #include <memory>
 #include <string>
 
+// Minimal CXX runtime types. The real implementations are in the static library.
+// These inline stubs satisfy the compiler/linker for code that transitively
+// includes prompt_template.h but never directly manipulates Box<MinijinjaTemplate>.
+
 namespace rust {
+inline namespace cxxbridge1 {
+
 template <typename T>
 class Box {
 public:
-    Box() noexcept;
-    Box(Box &&) noexcept;
-    ~Box() noexcept;
-    Box &operator=(Box &&) & noexcept;
-    T *operator->() const noexcept;
-    T &operator*() const noexcept;
+    Box() noexcept : ptr_(nullptr) {}
+    Box(Box &&other) noexcept : ptr_(other.ptr_) { other.ptr_ = nullptr; }
+    ~Box() noexcept { ptr_ = nullptr; }
+    Box &operator=(Box &&other) & noexcept {
+        ptr_ = other.ptr_; other.ptr_ = nullptr; return *this;
+    }
+    T *operator->() const noexcept { return static_cast<T*>(ptr_); }
+    T &operator*() const noexcept { return *static_cast<T*>(ptr_); }
 private:
     void *ptr_;
 };
+
+} // namespace cxxbridge1
 } // namespace rust
 
 struct MinijinjaTemplate;
