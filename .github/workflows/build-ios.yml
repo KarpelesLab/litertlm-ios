@@ -105,7 +105,7 @@ jobs:
             xcrun --sdk "${SDK}" clang++ \
               -target "${TARGET}" -isysroot "${SDK_PATH}" \
               -force_load "${LIB_FILE}" \
-              -framework Foundation -framework Metal \
+              -framework Foundation -framework Metal -framework MetalPerformanceShaders \
               -framework AVFoundation -framework AudioToolbox \
               -lc++ -lobjc \
               /tmp/framework_test_${SLICE}.o \

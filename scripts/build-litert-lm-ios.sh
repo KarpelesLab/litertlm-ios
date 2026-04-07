@@ -41,6 +41,8 @@ apple_static_library(
     deps = [
         "//runtime/engine:litert_lm_lib",
         "//runtime/components/rust:minijinja_template_cpp",
+        # Metal GPU delegate — open-source TFLite Metal implementation
+        "@litert//tflite/delegates/gpu:metal_delegate",
     ],
 )
 BUILDEOF
