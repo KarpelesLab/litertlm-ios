@@ -111,9 +111,13 @@ collect_libs() {
 
     log "Collecting library for ${config_label}..."
 
-    cd "${LITERT_LM_DIR}"
     local output_base
+    local bazel_bin
     output_base="$(bazel info output_base 2>/dev/null)"
+    bazel_bin="$(bazel info bazel-bin --config="${config_label}" 2>/dev/null || true)"
+    if [ -z "${bazel_bin}" ]; then
+        bazel_bin="$(bazel info bazel-bin 2>/dev/null || echo "bazel-bin")"
+    fi
 
     # apple_static_library produces two files:
     #   LiteRTLM-arm64-apple-ios13.0-fl.a  (per-arch, contains all deps - THIS is what we want)
