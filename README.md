@@ -7,9 +7,11 @@ Pre-built iOS frameworks for [LiteRT-LM](https://github.com/google-ai-edge/LiteR
 | Framework | Type | Purpose |
 |-----------|------|---------|
 | **LiteRTLM.xcframework** | Static | Core LLM engine + Obj-C wrapper. Required. |
-| **GemmaConstraintProvider.xcframework** | Dynamic | Constrained decoding / tool calling for Gemma models. Optional. |
+| **GemmaConstraintProvider.xcframework** | Dynamic | Constrained decoding / tool calling for Gemma models. Optional. **Simulator only** — see note below. |
 
 Download both from the [latest CI run](../../actions/workflows/build-ios.yml) artifacts.
+
+> **Note:** GemmaConstraintProvider is a closed-source prebuilt from Google. The upstream `ios_arm64` binary is [incorrectly tagged as simulator](https://github.com/google-ai-edge/LiteRT-LM/tree/main/prebuilt/ios_arm64), so constrained decoding currently only works in the simulator. The core LiteRTLM framework works on both device and simulator.
 
 ## Setup
 

@@ -360,19 +360,22 @@ create_xcframeworks() {
     log "Created ${xcfw}"
 
     # GemmaConstraintProvider dynamic xcframework
-    local arm64_dylib="${OUTPUT_DIR}/ios_arm64/dylibs/libGemmaModelConstraintProvider.dylib"
+    # NOTE: Google's prebuilt ios_arm64 dylib is broken upstream — it's tagged
+    # as simulator (platform 2) instead of iOS device (platform 1), with
+    # minos 26.2. We can only ship the simulator slice until this is fixed.
+    # See: https://github.com/google-ai-edge/LiteRT-LM/tree/main/prebuilt/ios_arm64
     local sim_dylib="${OUTPUT_DIR}/ios_sim_arm64/dylibs/libGemmaModelConstraintProvider.dylib"
-    if [ -f "${arm64_dylib}" ] && [ -f "${sim_dylib}" ]; then
-        log "Creating GemmaConstraintProvider.xcframework (dynamic)..."
+    if [ -f "${sim_dylib}" ]; then
+        log "Creating GemmaConstraintProvider.xcframework (simulator only)..."
         local gemma_xcfw="${OUTPUT_DIR}/GemmaConstraintProvider.xcframework"
         rm -rf "${gemma_xcfw}"
         xcodebuild -create-xcframework \
-            -library "${arm64_dylib}" \
             -library "${sim_dylib}" \
             -output "${gemma_xcfw}"
         log "Created ${gemma_xcfw}"
+        log "WARNING: Device (ios_arm64) slice unavailable — upstream prebuilt is mislabeled as simulator"
     else
-        log "WARNING: GemmaConstraintProvider dylib not found for one or both archs"
+        log "WARNING: GemmaConstraintProvider dylib not found"
     fi
 }
 
