@@ -73,7 +73,7 @@ jobs:
           ls "${HDR_DIR}/"
 
           cat > /tmp/framework_test.m << 'TESTEOF'
-          #import <LiteRTLM/LiteRTLM.h>
+          #import "LiteRTLM.h"
           int main() {
               @autoreleasepool {
                   LRTEngineConfig *config = [LRTEngineConfig configWithModelPath:@"test.litertlm"];

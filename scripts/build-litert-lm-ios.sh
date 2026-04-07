@@ -297,10 +297,10 @@ prepare_public_headers() {
 #ifndef LITERT_LM_IOS_UMBRELLA_H
 #define LITERT_LM_IOS_UMBRELLA_H
 
-#import <LiteRTLM/LRTTypes.h>
-#import <LiteRTLM/LRTEngine.h>
-#import <LiteRTLM/LRTSession.h>
-#import <LiteRTLM/LRTConversation.h>
+#import "LRTTypes.h"
+#import "LRTEngine.h"
+#import "LRTSession.h"
+#import "LRTConversation.h"
 
 #endif /* LITERT_LM_IOS_UMBRELLA_H */
 UMBRELLA
