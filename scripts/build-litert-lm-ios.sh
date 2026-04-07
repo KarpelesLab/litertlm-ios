@@ -261,6 +261,17 @@ compile_wrapper() {
         xcrun --sdk "${sdk}" clang++ "${clang_flags[@]}" -c "$mm_file" -o "$obj"
         obj_files+=("$obj")
     done
+    # Compile C stubs (e.g. GemmaConstraintProviderStub)
+    for c_file in "${wrapper_dir}"/*.c; do
+        if [ -f "$c_file" ]; then
+            local obj="${dest_dir}/$(basename "${c_file}" .c).o"
+            log "  Compiling $(basename "$c_file")..."
+            xcrun --sdk "${sdk}" clang \
+                -target "${target}" -isysroot "${sdk_path}" \
+                -c "$c_file" -o "$obj"
+            obj_files+=("$obj")
+        fi
+    done
 
     log "  Merging wrapper objects into liblitert_lm.a..."
     libtool -static -o "${dest_dir}/liblitert_lm_merged.a" \
