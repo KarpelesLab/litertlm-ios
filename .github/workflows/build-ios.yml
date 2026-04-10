@@ -1,10 +1,9 @@
 name: "Build LiteRT-LM for iOS"
 
+# Project is shelved (see README). Auto-triggers disabled to save runner minutes.
+# Run manually via "Run workflow" button or gh cli:
+#   gh workflow run build-ios.yml
 on:
-  push:
-    branches: [main, master]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       litert_lm_version:

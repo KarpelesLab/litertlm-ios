@@ -1,5 +1,35 @@
 # LiteRT-LM for iOS
 
+> **⚠️ Status: Shelved (April 2026)**
+>
+> This project is **frozen** and not actively maintained. It works (produces a
+> functional `LiteRTLM.xcframework`) but LiteRT-LM on iOS has a structural
+> limitation that makes it the wrong choice for production today: **Google's
+> GPU accelerator for LiteRT-LM is not open-source.** We wrote a Metal adapter
+> that bridges LiteRT-LM's accelerator plugin interface to the open-source
+> TFLite Metal GPU delegate, but it's a workaround — not a first-class path.
+>
+> **For new iOS on-device LLM work, use one of these instead:**
+>
+> | Runtime | Strengths |
+> |---------|-----------|
+> | **[MLX Swift](https://github.com/ml-explore/mlx-swift)** | Apple's native ML framework. Metal-first. Qwen, Gemma, Llama, Phi out of the box. Fastest on Apple Silicon. |
+> | **[SharpAI/SwiftLM](https://github.com/SharpAI/SwiftLM)** | MLX Swift + TurboQuant KV cache compression. Best memory efficiency. Runs on iPhone 13 Pro (6 GB). |
+> | **[llama.cpp](https://github.com/ggml-org/llama.cpp)** | Most portable. GGUF format. Widest model/quantization support. |
+> | **[MLC-LLM](https://llm.mlc.ai/docs/deploy/ios.html)** | TVM-based, cross-platform, has an iOS chat app. |
+>
+> This repo remains useful if:
+> - Google eventually open-sources the real LiteRT-LM GPU accelerator (see
+>   [upstream issue #1050](https://github.com/google-ai-edge/LiteRT-LM/issues/1050))
+> - You need a specific Google feature (proprietary model compilations, etc.)
+> - You're researching how to bridge TFLite delegates into LiteRT-LM
+>
+> The build infrastructure (Bazel iOS cross-compilation, apple_static_library
+> injection, Metal delegate adapter, Rust CXX bridge stubs) may be useful as
+> reference for similar integration problems.
+
+---
+
 Pre-built iOS framework for [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM), Google's on-device LLM inference engine.
 
 Download `LiteRTLM.xcframework` from the [latest CI run](../../actions/workflows/build-ios.yml) artifacts.
@@ -159,6 +189,37 @@ Requires macOS with Xcode and Bazel (via Bazelisk):
 ```
 
 Set `LITERT_LM_VERSION` to build a different version (default: `v0.10.1`).
+
+## What we learned (project post-mortem)
+
+This project cross-compiled LiteRT-LM for iOS end-to-end, but discovered several
+upstream issues that make it impractical for production use today:
+
+1. **GPU accelerator is closed-source** — LiteRT-LM's `default_static_gpu_accelerator`
+   target in the BUILD file has empty deps; the actual GPU implementation is Google-
+   internal and stripped via copybara from public releases. Our Metal delegate
+   adapter (`Sources/LiteRTLM/MetalGpuAccelerator.mm`) works as a bridge but is not
+   optimized for LLM workloads the way Google's internal version presumably is.
+
+2. **GemmaConstraintProvider prebuilts are broken** — `prebuilt/ios_arm64/` ships
+   a dylib tagged with `platform 2` (macOS) and `minos 26.2` — it's actually a
+   simulator binary, not a device binary. We dropped the Gemma-specific constraint
+   provider entirely (the open-source llguidance path covers JSON/regex/grammar
+   constraints anyway) and provided C stubs for the symbols.
+
+3. **Generated header extraction is fragile** — Bazel's `apple_static_library`
+   does platform transitions that scatter generated files into `_virtual_includes`
+   symlinks. Some generated files (like `minijinja_template.rs.h`) only exist
+   transiently during compilation. We worked around this with stubs.
+
+4. **LiteRT-LM targets server-class inference** — the runtime is designed for
+   Android/Linux/desktop first, with iOS support being experimental. The native
+   iOS LLM runtimes (MLX, llama.cpp, MLC-LLM) are more mature and better optimized
+   for Apple Silicon.
+
+See [the Metal adapter](Sources/LiteRTLM/MetalGpuAccelerator.mm) for an example of
+bridging TFLite delegates into LiteRT-LM's accelerator plugin system — this pattern
+may be useful if you're integrating a custom backend.
 
 ## License
 
